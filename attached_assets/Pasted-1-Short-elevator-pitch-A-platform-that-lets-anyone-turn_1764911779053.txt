@@ -1,0 +1,85 @@
+1 — Short elevator pitch
+
+A platform that lets anyone turn collections of YouTube videos into full “courses” (like Udemy) — with custom titles/description, structured sections, AI-generated practice questions and a RAG-based assistant for doubts — plus an approval & marketplace flow so creators can sell courses and learners get completion certificates.
+
+2 — Key user flows (high level)
+
+Creator: Paste YouTube URLs → create course metadata (title, description, price, tags) → optionally split videos into sections (manual or AI) → generate practice questions & course summary → submit for approval → once approved, publish & sell.
+
+Learner: Browse/purchase or add free course to “My Learnings” → Open course (video player left, course outline + AI assistant + notes on right) → Mark lessons complete → Take practice tests → On course completion, receive downloadable certificate (PDF).
+
+Owner/Admin: Review submitted course → Approve/Reject with feedback → Set revenue share and payout (Stripe/Connect).
+
+3 — MVP feature set (must-have)
+
+User auth (email + OAuth e.g., Google)
+
+Create a course by pasting YouTube video URLs
+
+Course metadata: title, description, thumbnail, tags, price (or free)
+
+Play embedded YouTube videos (left pane) and course outline (right pane)
+
+Manual & AI-assisted video → section splitting (use transcript)
+
+Store course in “My Learnings” for owner & students
+
+RAG-based AI assistant (ask questions about course content, answers sourced from transcripts + video notes)
+
+Generate practice questions & auto-evaluate (basic MCQ and short answer)
+
+Course progress tracking & completion status
+
+Admin approval flow
+
+Certificate PDF generation on completion (downloadable)
+
+Basic marketplace UI (list of approved courses)
+
+Payments: Stripe integration (for selling courses)
+
+Basic analytics (views, completion rate)
+
+4 — Nice-to-have (post-MVP)
+
+Video chapter detection & enrichments (timestamps)
+
+Seller dashboards & revenue reports
+
+Comments & reviews, Q&A per lecture
+
+Course preview mode & coupon codes
+
+Quiz reattempts, graded scores, badges
+
+Content moderation and copyright checks (YouTube TOS)
+
+Mobile responsive / PWA
+
+Multi-language transcripts & translation
+
+Recommendations / course bundles
+
+5 — UX & layout (single-course view)
+
+Left column (60% width)
+
+Large video player (embedded YouTube)
+
+Playback controls, playback speed, captions toggle
+
+“Mark lesson complete” button, timestamped notes
+
+Right column (40% width)
+
+Course title, instructor name, progress bar
+
+Accordion: Sections → Lessons (click lesson jumps to timestamp)
+
+AI Assistant chat box (RAG): ask question → shows source snippets + timestamp + link to video time
+
+Practice quiz card (start quiz)
+
+Resources / Download transcript / Add to bookmarks
+
+6 — Data model (simplified)
