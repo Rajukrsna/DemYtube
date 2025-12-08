@@ -1,17 +1,10 @@
 import { Link, useLocation } from "wouter";
+import { SignInButton, SignUpButton, UserButton } from "@clerk/clerk-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { useAuth } from "@/hooks/useAuth";
 import { useTheme } from "@/components/ThemeProvider";
-import { Search, Plus, Moon, Sun, BookOpen, GraduationCap, Settings, LogOut, LayoutDashboard, Shield } from "lucide-react";
+import { Search, Plus, Moon, Sun, GraduationCap } from "lucide-react";
 import { useState } from "react";
 
 export function Navbar() {
@@ -25,16 +18,6 @@ export function Navbar() {
     if (searchQuery.trim()) {
       window.location.href = `/marketplace?search=${encodeURIComponent(searchQuery)}`;
     }
-  };
-
-  const getInitials = () => {
-    if (user?.firstName && user?.lastName) {
-      return `${user.firstName[0]}${user.lastName[0]}`.toUpperCase();
-    }
-    if (user?.email) {
-      return user.email[0].toUpperCase();
-    }
-    return "U";
   };
 
   return (
@@ -90,63 +73,44 @@ export function Navbar() {
                 </Button>
               </Link>
               
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" className="relative h-9 w-9 rounded-full" data-testid="button-user-menu">
-                    <Avatar className="h-9 w-9">
-                      <AvatarImage src={user.profileImageUrl || undefined} alt={user.firstName || "User"} />
-                      <AvatarFallback>{getInitials()}</AvatarFallback>
-                    </Avatar>
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent className="w-56" align="end">
-                  <div className="flex items-center gap-2 p-2">
-                    <Avatar className="h-8 w-8">
-                      <AvatarImage src={user.profileImageUrl || undefined} />
-                      <AvatarFallback>{getInitials()}</AvatarFallback>
-                    </Avatar>
-                    <div className="flex flex-col">
-                      <span className="text-sm font-medium">
-                        {user.firstName} {user.lastName}
-                      </span>
-                      <span className="text-xs text-muted-foreground">{user.email}</span>
-                    </div>
-                  </div>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem asChild>
-                    <Link href="/dashboard" className="flex items-center gap-2 cursor-pointer" data-testid="link-dashboard">
-                      <LayoutDashboard className="h-4 w-4" />
-                      My Learnings
-                    </Link>
-                  </DropdownMenuItem>
-                  <DropdownMenuItem asChild>
-                    <Link href="/my-courses" className="flex items-center gap-2 cursor-pointer" data-testid="link-my-courses">
-                      <BookOpen className="h-4 w-4" />
-                      My Courses
-                    </Link>
-                  </DropdownMenuItem>
+              <UserButton 
+                afterSignOutUrl="/"
+                appearance={{
+                  elements: {
+                    avatarBox: "h-9 w-9",
+                  },
+                }}
+              >
+                <UserButton.MenuItems>
+                  <UserButton.Link
+                    label="Dashboard"
+                    labelIcon={<GraduationCap className="h-4 w-4" />}
+                    href="/dashboard"
+                  />
+                  <UserButton.Link
+                    label="My Courses"
+                    labelIcon={<Plus className="h-4 w-4" />}
+                    href="/my-courses"
+                  />
                   {user.role === "admin" && (
-                    <DropdownMenuItem asChild>
-                      <Link href="/admin" className="flex items-center gap-2 cursor-pointer" data-testid="link-admin">
-                        <Shield className="h-4 w-4" />
-                        Admin Panel
-                      </Link>
-                    </DropdownMenuItem>
+                    <UserButton.Link
+                      label="Admin Panel"
+                      labelIcon={<span className="h-4 w-4">🛡️</span>}
+                      href="/admin"
+                    />
                   )}
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem asChild>
-                    <a href="/api/logout" className="flex items-center gap-2 cursor-pointer text-destructive" data-testid="link-logout">
-                      <LogOut className="h-4 w-4" />
-                      Log out
-                    </a>
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
+                </UserButton.MenuItems>
+              </UserButton>
             </>
           ) : (
-            <a href="/api/login">
-              <Button data-testid="button-login">Sign In</Button>
-            </a>
+            <div className="flex gap-2">
+              <SignInButton mode="modal">
+                <Button variant="ghost" data-testid="button-signin">Sign In</Button>
+              </SignInButton>
+              <SignUpButton mode="modal">
+                <Button data-testid="button-signup">Sign Up</Button>
+              </SignUpButton>
+            </div>
           )}
         </div>
       </div>

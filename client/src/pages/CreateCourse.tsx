@@ -1,7 +1,8 @@
 import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
 import { useMutation } from "@tanstack/react-query";
-import { queryClient, apiRequest } from "@/lib/queryClient";
+import { queryClient } from "@/lib/queryClient";
+import { authFetch } from "@/lib/api";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { useForm } from "react-hook-form";
@@ -43,6 +44,7 @@ const courseFormSchema = z.object({
   thumbnail: z.string().url().optional().or(z.literal("")),
   price: z.string().optional(),
   isFree: z.boolean().default(true),
+  isPublic: z.boolean().default(false), // false = personal, true = marketplace
   tags: z.array(z.string()).default([]),
 });
 
@@ -98,6 +100,7 @@ export default function CreateCourse() {
       thumbnail: "",
       price: "0",
       isFree: true,
+      isPublic: false,
       tags: [],
     },
   });
@@ -120,8 +123,12 @@ export default function CreateCourse() {
       if (!videoId) {
         throw new Error("Invalid YouTube URL");
       }
-      const response = await apiRequest("POST", "/api/youtube/info", { videoId });
-      return response.json();
+      const response = await authFetch("/api/youtube/info", {
+        method: "POST",
+        body: JSON.stringify({ videoId })
+      });
+      const result = await response.json();
+      return result.data; // Extract data from { success, data } response
     },
     onSuccess: (data) => {
       const newVideo: VideoInput = {
@@ -163,14 +170,21 @@ export default function CreateCourse() {
           })),
         })),
       };
-      const response = await apiRequest("POST", "/api/courses", courseData);
-      return response.json();
+      const response = await authFetch("/api/courses", {
+        method: "POST",
+        body: JSON.stringify(courseData)
+      });
+      const result = await response.json();
+      return result.data; // Extract data from { success, data } response
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["/api/courses"] });
+      const isPublic = form.getValues("isPublic");
       toast({
         title: "Course Created",
-        description: "Your course has been submitted for review!",
+        description: isPublic 
+          ? "Your course has been submitted for marketplace approval!"
+          : "Your course is now available in My Courses!",
       });
       setLocation(`/my-courses`);
     },
@@ -564,6 +578,28 @@ export default function CreateCourse() {
                         )}
                       />
                     )}
+                    
+                    <FormField
+                      control={form.control}
+                      name="isPublic"
+                      render={({ field }) => (
+                        <FormItem className="flex items-center justify-between rounded-lg border p-4">
+                          <div>
+                            <FormLabel className="text-base">Publish to Marketplace</FormLabel>
+                            <FormDescription>
+                              Submit this course for admin approval to sell publicly
+                            </FormDescription>
+                          </div>
+                          <FormControl>
+                            <Switch
+                              checked={field.value}
+                              onCheckedChange={field.onChange}
+                              data-testid="switch-public-course"
+                            />
+                          </FormControl>
+                        </FormItem>
+                      )}
+                    />
                   </div>
 
                   <div>
@@ -750,6 +786,12 @@ export default function CreateCourse() {
                           </span>
                         </div>
                         <div>
+                          <span className="text-muted-foreground">Visibility:</span>{" "}
+                          <span className="font-medium">
+                            {form.watch("isPublic") ? "Public Marketplace" : "Personal Course"}
+                          </span>
+                        </div>
+                        <div>
                           <span className="text-muted-foreground">Tags:</span>{" "}
                           <span className="font-medium">
                             {form.watch("tags").join(", ") || "None"}
@@ -799,8 +841,11 @@ export default function CreateCourse() {
 
                   <div className="bg-muted rounded-lg p-4">
                     <p className="text-sm">
-                      <strong>Note:</strong> Your course will be submitted for review before it
-                      becomes publicly available. You'll be notified once it's approved.
+                      <strong>Note:</strong>{" "}
+                      {form.watch("isPublic") 
+                        ? "Your course will be submitted for admin review before it becomes publicly available in the marketplace. You'll be notified once it's approved."
+                        : "Your course will be immediately available in your 'My Courses' section. You can enable 'Publish to Marketplace' later if you want to sell it publicly."
+                      }
                     </p>
                   </div>
                 </CardContent>

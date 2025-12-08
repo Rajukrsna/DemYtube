@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from "react";
 import { useRoute } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { queryClient, apiRequest } from "@/lib/queryClient";
+import { queryClient } from "@/lib/queryClient";
+import { authFetch } from "@/lib/api";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
@@ -35,7 +36,7 @@ import {
 import type { CourseWithInstructor, SectionWithLessons, Lesson, ChatMessage, Quiz, Question, LessonProgress, Enrollment } from "@shared/schema";
 
 interface QuizQuestion extends Question {
-  options?: { id: string; text: string }[];
+  options: { id: string; text: string }[];
 }
 
 export default function CoursePlayer() {
@@ -91,7 +92,9 @@ export default function CoursePlayer() {
 
   const markCompleteMutation = useMutation({
     mutationFn: async (lessonId: string) => {
-      await apiRequest("POST", `/api/progress/${lessonId}/complete`);
+      await authFetch(`/api/progress/${lessonId}/complete`, {
+        method: "POST"
+      });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/progress", courseId] });
@@ -101,7 +104,10 @@ export default function CoursePlayer() {
 
   const sendMessageMutation = useMutation({
     mutationFn: async (content: string) => {
-      await apiRequest("POST", `/api/chat/${courseId}`, { content });
+      await authFetch(`/api/chat/${courseId}`, {
+        method: "POST",
+        body: JSON.stringify({ content })
+      });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/chat", courseId] });
@@ -111,12 +117,14 @@ export default function CoursePlayer() {
 
   const submitQuizMutation = useMutation({
     mutationFn: async () => {
-      const response = await apiRequest("POST", `/api/quizzes/${quiz?.id}/submit`, {
-        answers: quizAnswers,
+      const response = await authFetch(`/api/quizzes/${quiz?.id}/submit`, {
+        method: "POST",
+        body: JSON.stringify({ answers: quizAnswers })
       });
-      return response.json();
+      const result = await response.json();
+      return result.data;
     },
-    onSuccess: (data) => {
+    onSuccess: (data: any) => {
       setQuizSubmitted(true);
       setQuizScore(data.score);
       toast({
@@ -362,11 +370,6 @@ export default function CoursePlayer() {
                         data-testid={`chat-message-${msg.id}`}
                       >
                         <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
-                        {msg.sources && (
-                          <div className="mt-2 pt-2 border-t border-current/20 text-xs opacity-80">
-                            Sources: {(msg.sources as any[])?.length || 0} references
-                          </div>
-                        )}
                       </div>
                     </div>
                   ))

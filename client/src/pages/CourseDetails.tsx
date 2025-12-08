@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { useRoute, Link } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { queryClient, apiRequest } from "@/lib/queryClient";
+import { queryClient } from "@/lib/queryClient";
+import { authFetch } from "@/lib/api";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
@@ -47,10 +48,17 @@ export default function CourseDetails() {
   const enrollMutation = useMutation({
     mutationFn: async () => {
       if (course?.isFree || parseFloat(course?.price || "0") === 0) {
-        await apiRequest("POST", `/api/enrollments`, { courseId });
+        await authFetch(`/api/enrollments`, {
+          method: "POST",
+          body: JSON.stringify({ courseId })
+        });
       } else {
-        const response = await apiRequest("POST", `/api/payments/create-session`, { courseId });
-        const data = await response.json();
+        const response = await authFetch(`/api/payments/create-session`, {
+          method: "POST",
+          body: JSON.stringify({ courseId })
+        });
+        const result = await response.json();
+        const data = result.data;
         window.location.href = data.url;
         return;
       }

@@ -45,8 +45,9 @@ export const courses = pgTable("courses", {
   instructorId: varchar("instructor_id").notNull().references(() => users.id),
   price: decimal("price", { precision: 10, scale: 2 }).default("0"),
   isFree: boolean("is_free").default(true),
+  isPublic: boolean("is_public").default(false), // false = personal course, true = marketplace course
   tags: text("tags").array(),
-  status: varchar("status", { length: 20 }).default("draft").notNull(), // draft, pending, approved, rejected
+  status: varchar("status", { length: 20 }).default("approved").notNull(), // draft, pending, approved, rejected
   rejectionFeedback: text("rejection_feedback"),
   totalDuration: integer("total_duration").default(0), // in seconds
   enrollmentCount: integer("enrollment_count").default(0),

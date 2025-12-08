@@ -1,4 +1,4 @@
-import { eq, and, desc, sql } from "drizzle-orm";
+import { eq, and, desc, sql, inArray } from "drizzle-orm";
 import { db } from "./db";
 import {
   users,
@@ -338,7 +338,7 @@ export class DatabaseStorage implements IStorage {
       .where(
         and(
           eq(lessonProgress.userId, userId),
-          sql`${lessonProgress.lessonId} = ANY(${lessonIds})`
+          inArray(lessonProgress.lessonId, lessonIds)
         )
       );
 

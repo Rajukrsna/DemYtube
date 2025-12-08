@@ -1,11 +1,13 @@
 import { Switch, Route } from "wouter";
-import { queryClient } from "./lib/queryClient";
+import { useUser, useAuth as useClerkAuth } from "@clerk/clerk-react";
 import { QueryClientProvider } from "@tanstack/react-query";
+import { queryClient } from "./lib/queryClient";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { Navbar } from "@/components/Navbar";
-import { useAuth } from "@/hooks/useAuth";
+import { setAuthTokenGetter } from "@/lib/api";
+import { useEffect } from "react";
 
 import Landing from "@/pages/Landing";
 import Marketplace from "@/pages/Marketplace";
@@ -20,56 +22,60 @@ import CourseAnalytics from "@/pages/CourseAnalytics";
 import NotFound from "@/pages/not-found";
 
 function Router() {
-  const { isAuthenticated, isLoading } = useAuth();
+  const { user, isLoaded } = useUser();
+
+  if (!isLoaded) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
+      </div>
+    );
+  }
 
   return (
     <Switch>
-      {isLoading || !isAuthenticated ? (
-        <>
-          <Route path="/" component={Landing} />
-          <Route path="/marketplace" component={Marketplace} />
-          <Route path="/course/:courseId" component={CourseDetails} />
-          <Route path="/certificate/:certificateId" component={Certificate} />
-        </>
-      ) : (
-        <>
-          <Route path="/" component={Dashboard} />
-          <Route path="/marketplace" component={Marketplace} />
-          <Route path="/dashboard" component={Dashboard} />
-          <Route path="/course/:courseId" component={CourseDetails} />
-          <Route path="/course/:courseId/analytics" component={CourseAnalytics} />
-          <Route path="/learn/:courseId" component={CoursePlayer} />
-          <Route path="/create-course" component={CreateCourse} />
-          <Route path="/my-courses" component={MyCourses} />
-          <Route path="/admin" component={AdminPanel} />
-          <Route path="/certificate/:certificateId" component={Certificate} />
-        </>
-      )}
+      <Route path="/" component={user ? Dashboard : Landing} />
+      <Route path="/marketplace" component={Marketplace} />
+      <Route path="/dashboard" component={user ? Dashboard : Landing} />
+      <Route path="/course/:courseId" component={CourseDetails} />
+      <Route path="/course/:courseId/analytics" component={user ? CourseAnalytics : Landing} />
+      <Route path="/learn/:courseId" component={user ? CoursePlayer : Landing} />
+      <Route path="/create-course" component={user ? CreateCourse : Landing} />
+      <Route path="/my-courses" component={user ? MyCourses : Landing} />
+      <Route path="/admin" component={user ? AdminPanel : Landing} />
+      <Route path="/certificate/:certificateId" component={Certificate} />
       <Route component={NotFound} />
     </Switch>
   );
 }
 
 function AppContent() {
+  const { getToken } = useClerkAuth();
+  
+  // Set up global auth token getter - use "neon" JWT template for direct DB auth
+  useEffect(() => {
+    setAuthTokenGetter(() => getToken({ template: "neonDemy" }));
+  }, [getToken]);
+
   return (
-    <div className="min-h-screen bg-background">
-      <Navbar />
-      <main>
-        <Router />
-      </main>
-    </div>
+    <ThemeProvider>
+      <TooltipProvider>
+        <div className="min-h-screen bg-background">
+          <Navbar />
+          <main>
+            <Router />
+          </main>
+          <Toaster />
+        </div>
+      </TooltipProvider>
+    </ThemeProvider>
   );
 }
 
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <ThemeProvider>
-        <TooltipProvider>
-          <Toaster />
-          <AppContent />
-        </TooltipProvider>
-      </ThemeProvider>
+      <AppContent />
     </QueryClientProvider>
   );
 }

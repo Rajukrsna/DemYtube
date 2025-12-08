@@ -1,167 +1,181 @@
-import passport from "passport";
-import session from "express-session";
-import type { Express, RequestHandler } from "express";
-import connectPgSimple from "connect-pg-simple";
-import { pool } from "./db";
+import { createClerkClient, verifyToken } from "@clerk/backend";
+import type { Request, Response, NextFunction } from "express";
 import { storage } from "./storage";
 
-// Extend Express Request type
+const clerkClient = createClerkClient({
+  secretKey: process.env.CLERK_SECRET_KEY,
+});
+
+// Extend Express Request to include auth
 declare global {
   namespace Express {
-    interface User {
-      id: string;
-      email?: string | null;
-      firstName?: string | null;
-      lastName?: string | null;
-      profileImageUrl?: string | null;
-      role: string;
+    interface Request {
+      auth?: {
+        userId: string;
+        sessionId: string;
+      };
     }
   }
 }
 
-export async function setupAuth(app: Express) {
-  const PgSession = connectPgSimple(session);
-
-  const sessionMiddleware = session({
-    store: new PgSession({
-      pool,
-      tableName: "sessions",
-      createTableIfMissing: true,
-    }),
-    secret: process.env.SESSION_SECRET || "learntube-secret-key-change-in-production",
-    resave: false,
-    saveUninitialized: false,
-    cookie: {
-      httpOnly: true,
-      secure: false, // Set to true in production with HTTPS
-      maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
-    },
-  });
-
-  app.use(sessionMiddleware);
-  app.use(passport.initialize());
-  app.use(passport.session());
-
-  passport.serializeUser((user: Express.User, done) => {
-    done(null, user.id);
-  });
-
-  passport.deserializeUser(async (id: string, done) => {
-    try {
-      const user = await storage.getUser(id);
-      done(null, user);
-    } catch (error) {
-      done(error);
+// Middleware to verify Clerk session and attach user ID to request
+export async function authenticateUser(req: Request, res: Response, next: NextFunction) {
+  try {
+    const authHeader = req.headers.authorization;
+    
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized - No token provided"
+      });
     }
-  });
 
-  // Replit Auth callback route
-  app.get("/api/callback", async (req, res) => {
+    const token = authHeader.substring(7); // Remove 'Bearer ' prefix
+    
+    // Use networkless verification (recommended by Clerk)
     try {
-      const userId = req.headers["x-replit-user-id"] as string;
-      const userName = req.headers["x-replit-user-name"] as string;
-      const userProfileImage = req.headers["x-replit-user-profile-image"] as string;
-      const userRoles = req.headers["x-replit-user-roles"] as string;
-
-      if (!userId) {
-        return res.redirect("/?error=no_user");
+      const payload = await verifyToken(token, {
+        secretKey: process.env.CLERK_SECRET_KEY!,
+      });
+      
+      if (!payload || !payload.sub) {
+        return res.status(401).json({
+          success: false,
+          message: "Unauthorized - Invalid token"
+        });
       }
 
-      // Upsert user in database
-      const user = await storage.upsertUser({
-        id: userId,
-        email: userName ? `${userName}@replit.com` : null,
-        firstName: userName || null,
-        lastName: null,
-        profileImageUrl: userProfileImage || null,
-        role: userRoles?.includes("admin") ? "admin" : "user",
-      });
+      // Attach user info to request
+      req.auth = {
+        userId: payload.sub,
+        sessionId: payload.sid as string,
+      };
 
-      // Log user in
-      req.login(user, (err) => {
-        if (err) {
-          console.error("Login error:", err);
-          return res.redirect("/?error=login_failed");
+      // Sync user to database if not exists
+      await syncUserToDatabase(payload.sub);
+
+      next();
+    } catch (verifyError: any) {
+      console.error('Token verification failed:', verifyError.message || verifyError);
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized - Token verification failed"
+      });
+    }
+  } catch (error) {
+    console.error('Authentication error:', error);
+    return res.status(401).json({
+      success: false,
+      message: "Unauthorized - Authentication failed"
+    });
+  }
+}
+
+// Optional auth middleware (doesn't fail if no token)
+export async function optionalAuth(req: Request, res: Response, next: NextFunction) {
+  try {
+    const authHeader = req.headers.authorization;
+    
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      const token = authHeader.substring(7);
+      try {
+        const payload = await verifyToken(token, {
+          secretKey: process.env.CLERK_SECRET_KEY!,
+        });
+        
+        if (payload && payload.sub) {
+          req.auth = {
+            userId: payload.sub,
+            sessionId: payload.sid as string,
+          };
         }
-        res.redirect("/dashboard");
-      });
-    } catch (error) {
-      console.error("Auth callback error:", error);
-      res.redirect("/?error=callback_failed");
-    }
-  });
-
-  // OIDC-style auth for Replit
-  app.get("/api/login", (req, res) => {
-    // In Replit, the login is handled by the __replauthuser header
-    // Check if user is already authenticated
-    const userId = req.headers["x-replit-user-id"] as string;
-    
-    if (userId) {
-      return res.redirect("/api/callback");
+      } catch {
+        // Silently fail for optional auth
+      }
     }
     
-    // Redirect to Replit's login
-    res.redirect(`https://replit.com/auth_with_repl_site?domain=${req.headers.host}`);
-  });
-
-  app.get("/api/logout", (req, res) => {
-    req.logout((err) => {
-      if (err) console.error("Logout error:", err);
-      res.redirect("/");
-    });
-  });
+    next();
+  } catch (error) {
+    // Silently fail for optional auth
+    next();
+  }
 }
 
-// Middleware to check if user is authenticated
-export const isAuthenticated: RequestHandler = (req, res, next) => {
-  // Check Replit headers
-  const userId = req.headers["x-replit-user-id"] as string;
-  
-  if (userId && !req.isAuthenticated()) {
-    // Auto-login from Replit headers
-    storage.getUser(userId).then(async (user) => {
-      if (!user) {
-        // Create user if doesn't exist
-        const userName = req.headers["x-replit-user-name"] as string;
-        const userProfileImage = req.headers["x-replit-user-profile-image"] as string;
-        
-        const newUser = await storage.upsertUser({
-          id: userId,
-          email: userName ? `${userName}@replit.com` : null,
-          firstName: userName || null,
-          lastName: null,
-          profileImageUrl: userProfileImage || null,
-          role: "user",
-        });
-        
-        req.login(newUser, (err) => {
-          if (err) return res.status(401).json({ message: "Unauthorized" });
-          next();
-        });
-      } else {
-        req.login(user, (err) => {
-          if (err) return res.status(401).json({ message: "Unauthorized" });
-          next();
-        });
-      }
-    }).catch(() => {
-      res.status(401).json({ message: "Unauthorized" });
+// Helper to get Clerk user details
+export async function getClerkUser(userId: string) {
+  try {
+    return await clerkClient.users.getUser(userId);
+  } catch (error) {
+    console.error('Error fetching Clerk user:', error);
+    return null;
+  }
+}
+
+// Sync Clerk user to our database on first login/request
+async function syncUserToDatabase(clerkUserId: string) {
+  try {
+    // Check if user already exists in our database
+    const existingUser = await storage.getUser(clerkUserId);
+    
+    if (existingUser) {
+      return existingUser; // User already synced
+    }
+
+    // Fetch user details from Clerk
+    const clerkUser = await getClerkUser(clerkUserId);
+    
+    if (!clerkUser) {
+      console.error('Clerk user not found:', clerkUserId);
+      return null;
+    }
+
+    // Create new user in our database
+    const newUser = await storage.upsertUser({
+      id: clerkUserId,
+      email: clerkUser.emailAddresses[0]?.emailAddress || '',
+      firstName: clerkUser.firstName || '',
+      lastName: clerkUser.lastName || '',
+      profileImageUrl: clerkUser.imageUrl || null,
+      role: 'student', // Default role
     });
-    return;
-  }
 
-  if (req.isAuthenticated()) {
-    return next();
+    console.log('✅ User synced to database:', newUser.email);
+    return newUser;
+  } catch (error) {
+    console.error('Error syncing Clerk user to database:', error);
+    return null;
   }
-  
-  res.status(401).json({ message: "Unauthorized" });
-};
+}
 
-// Middleware to check if user is admin
-export const isAdmin: RequestHandler = (req, res, next) => {
-  if (req.user && req.user.role === "admin") {
-    return next();
+// Legacy sync function (kept for compatibility)
+export async function syncClerkUserToDatabase(clerkUserId: string, storage: any) {
+  try {
+    const clerkUser = await getClerkUser(clerkUserId);
+    
+    if (!clerkUser) {
+      throw new Error('Clerk user not found');
+    }
+
+    // Check if user already exists in our database
+    const existingUser = await storage.getUser(clerkUserId);
+    
+    if (existingUser) {
+      return existingUser;
+    }
+
+    // Create new user in our database
+    const newUser = await storage.upsertUser({
+      id: clerkUserId,
+      email: clerkUser.emailAddresses[0]?.emailAddress || '',
+      firstName: clerkUser.firstName || '',
+      lastName: clerkUser.lastName || '',
+      profileImageUrl: clerkUser.imageUrl || null,
+      role: 'student',
+    });
+
+    return newUser;
+  } catch (error) {
+    console.error('Error syncing Clerk user to database:', error);
+    throw error;
   }
-  res.status(403).json({ message: "Forbidden - Admin access required" });
-};
+}

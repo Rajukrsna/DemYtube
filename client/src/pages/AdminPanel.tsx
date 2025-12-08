@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { queryClient, apiRequest } from "@/lib/queryClient";
+import { queryClient } from "@/lib/queryClient";
+import { authFetch } from "@/lib/api";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
@@ -99,7 +100,9 @@ export default function AdminPanel() {
 
   const approveMutation = useMutation({
     mutationFn: async (courseId: string) => {
-      await apiRequest("POST", `/api/admin/courses/${courseId}/approve`);
+      await authFetch(`/api/admin/courses/${courseId}/approve`, {
+        method: "POST"
+      });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/courses"] });
@@ -112,7 +115,10 @@ export default function AdminPanel() {
 
   const rejectMutation = useMutation({
     mutationFn: async ({ courseId, feedback }: { courseId: string; feedback: string }) => {
-      await apiRequest("POST", `/api/admin/courses/${courseId}/reject`, { feedback });
+      await authFetch(`/api/admin/courses/${courseId}/reject`, {
+        method: "POST",
+        body: JSON.stringify({ feedback })
+      });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/courses"] });
