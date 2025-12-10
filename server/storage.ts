@@ -57,6 +57,7 @@ export interface IStorage {
   deleteCourse(id: string): Promise<void>;
 
   // Sections
+  getSection(id: string): Promise<Section | undefined>;
   getSectionsByCourse(courseId: string): Promise<SectionWithLessons[]>;
   createSection(section: InsertSection): Promise<Section>;
   updateSection(id: string, updates: Partial<Section>): Promise<Section | undefined>;
@@ -79,7 +80,9 @@ export interface IStorage {
   upsertLessonProgress(progress: InsertLessonProgress): Promise<LessonProgress>;
   updateLessonWatchTime(userId: string, lessonId: string, watchedSeconds: number): Promise<LessonProgress>;
   markLessonComplete(userId: string, lessonId: string): Promise<LessonProgress>;
+  markLessonIncomplete(userId: string, lessonId: string): Promise<LessonProgress>;
   getTotalWatchTime(userId: string): Promise<number>;
+  checkAndIssueCertificate(userId: string, courseId: string): Promise<Certificate | null>;
 
   // Quizzes
   getQuizByCourse(courseId: string): Promise<(Quiz & { questions: Question[] }) | undefined>;
@@ -95,8 +98,8 @@ export interface IStorage {
   createChatMessage(message: InsertChatMessage): Promise<ChatMessage>;
 
   // Certificates
-  getCertificate(id: string): Promise<Certificate | undefined>;
-  getCertificatesByUser(userId: string): Promise<Certificate[]>;
+  getCertificate(id: string): Promise<Certificate & { courseTotalDuration?: number } | undefined>;
+  getCertificatesByUser(userId: string): Promise<(Certificate & { courseTotalDuration?: number })[]>;
   getCertificateByUserAndCourse(userId: string, courseId: string): Promise<Certificate | undefined>;
   createCertificate(certificate: InsertCertificate): Promise<Certificate>;
 
@@ -214,6 +217,11 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Sections
+  async getSection(id: string): Promise<Section | undefined> {
+    const [section] = await db.select().from(sections).where(eq(sections.id, id));
+    return section;
+  }
+
   async getSectionsByCourse(courseId: string): Promise<SectionWithLessons[]> {
     const allSections = await db
       .select()
@@ -400,6 +408,15 @@ export class DatabaseStorage implements IStorage {
     });
   }
 
+  async markLessonIncomplete(userId: string, lessonId: string): Promise<LessonProgress> {
+    return this.upsertLessonProgress({
+      userId,
+      lessonId,
+      completed: false,
+      completedAt: null,
+    });
+  }
+
   async getTotalWatchTime(userId: string): Promise<number> {
     const result = await db
       .select({ total: sql<number>`COALESCE(SUM(${lessonProgress.watchedSeconds}), 0)` })
@@ -407,6 +424,69 @@ export class DatabaseStorage implements IStorage {
       .where(eq(lessonProgress.userId, userId));
     
     return result[0]?.total || 0;
+  }
+
+  async checkAndIssueCertificate(userId: string, courseId: string): Promise<Certificate | null> {
+    // Check if certificate already exists
+    const existingCert = await this.getCertificateByUserAndCourse(userId, courseId);
+    if (existingCert) return existingCert;
+
+    // Get all lessons in the course
+    const sectionsData = await this.getSectionsByCourse(courseId);
+    const allLessonIds = sectionsData.flatMap(s => s.lessons.map(l => l.id));
+    
+    if (allLessonIds.length === 0) return null;
+
+    // Get user's progress for this course
+    const progress = await this.getLessonProgress(userId, courseId);
+    const completedLessonIds = progress.filter(p => p.completed).map(p => p.lessonId);
+
+    // Check if all lessons are completed
+    const allCompleted = allLessonIds.every(id => completedLessonIds.includes(id));
+    
+    if (!allCompleted) return null;
+
+    // Get user and course details
+    const user = await this.getUser(userId);
+    const course = await this.getCourse(courseId);
+    
+    if (!user || !course) return null;
+
+    // Update or create enrollment completion
+    let enrollment = await this.getEnrollment(userId, courseId);
+    
+    if (!enrollment) {
+      // Auto-enroll if not enrolled (e.g., course creator testing their own course)
+      enrollment = await this.createEnrollment({
+        userId,
+        courseId,
+      });
+    }
+    
+    if (enrollment && !enrollment.completedAt) {
+      await this.updateEnrollment(enrollment.id, {
+        completedAt: new Date(),
+        progressPercent: 100,
+      });
+
+      // Increment course completion count
+      await db
+        .update(courses)
+        .set({ completionCount: sql`${courses.completionCount} + 1` })
+        .where(eq(courses.id, courseId));
+    }
+
+    // Create certificate
+    const certificate = await this.createCertificate({
+      userId,
+      courseId,
+      userName: `${user.firstName} ${user.lastName}`,
+      courseName: course.title,
+      uniqueId: randomUUID(),
+      totalDuration: course.totalDuration,
+    });
+
+    return certificate;
   }
 
   // Quizzes
@@ -462,17 +542,43 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Certificates
-  async getCertificate(id: string): Promise<Certificate | undefined> {
-    const [certificate] = await db.select().from(certificates).where(eq(certificates.id, id));
-    return certificate;
+  async getCertificate(id: string): Promise<Certificate & { courseTotalDuration?: number } | undefined> {
+    const result = await db
+      .select({
+        id: certificates.id,
+        uniqueId: certificates.uniqueId,
+        userId: certificates.userId,
+        courseId: certificates.courseId,
+        issuedAt: certificates.issuedAt,
+        userName: certificates.userName,
+        courseName: certificates.courseName,
+        totalDuration: certificates.totalDuration,
+        courseTotalDuration: courses.totalDuration,
+      })
+      .from(certificates)
+      .leftJoin(courses, eq(certificates.courseId, courses.id))
+      .where(eq(certificates.id, id));
+    return result[0] as any;
   }
 
-  async getCertificatesByUser(userId: string): Promise<Certificate[]> {
-    return db
-      .select()
+  async getCertificatesByUser(userId: string): Promise<(Certificate & { courseTotalDuration?: number })[]> {
+    const result = await db
+      .select({
+        id: certificates.id,
+        uniqueId: certificates.uniqueId,
+        userId: certificates.userId,
+        courseId: certificates.courseId,
+        issuedAt: certificates.issuedAt,
+        userName: certificates.userName,
+        courseName: certificates.courseName,
+        totalDuration: certificates.totalDuration,
+        courseTotalDuration: courses.totalDuration,
+      })
       .from(certificates)
+      .leftJoin(courses, eq(certificates.courseId, courses.id))
       .where(eq(certificates.userId, userId))
       .orderBy(desc(certificates.issuedAt));
+    return result as any;
   }
 
   async getCertificateByUserAndCourse(userId: string, courseId: string): Promise<Certificate | undefined> {

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { useRoute } from "wouter";
+import { useRoute, Link } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
 import { authFetch } from "@/lib/api";
@@ -92,6 +92,14 @@ export default function CoursePlayer() {
     enabled: !!courseId,
   });
 
+  const { data: courseCertificate } = useQuery<any>({
+    queryKey: ["/api/certificates/my"],
+    enabled: !!courseId && isAuthenticated,
+    select: (certificates: any[]) => {
+      return certificates?.find((cert: any) => cert.courseId === courseId);
+    },
+  });
+
   const updateWatchTimeMutation = useMutation({
     mutationFn: async ({ lessonId, seconds }: { lessonId: string; seconds: number }) => {
       await authFetch(`/api/progress/${lessonId}/watch-time`, {
@@ -103,13 +111,55 @@ export default function CoursePlayer() {
 
   const markCompleteMutation = useMutation({
     mutationFn: async (lessonId: string) => {
-      await authFetch(`/api/progress/${lessonId}/complete`, {
+      const response = await authFetch(`/api/progress/${lessonId}/complete`, {
         method: "POST"
       });
+      return response.json();
     },
-    onSuccess: () => {
+    onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ["/api/progress", courseId] });
       queryClient.invalidateQueries({ queryKey: ["/api/enrollments", courseId] });
+      queryClient.invalidateQueries({ queryKey: ["/api/certificates/my"] });
+      
+      // Check if certificate was issued
+      if (result.data.certificate) {
+        toast({
+          title: "🎉 Congratulations!",
+          description: result.data.message || "You've completed the course and earned a certificate!",
+          duration: 5000,
+        });
+      }
+    },
+  });
+
+  const toggleLessonCompleteMutation = useMutation({
+    mutationFn: async ({ lessonId, completed }: { lessonId: string; completed: boolean }) => {
+      if (completed) {
+        // Mark as incomplete
+        await authFetch(`/api/progress/${lessonId}/uncomplete`, {
+          method: "POST"
+        });
+      } else {
+        // Mark as complete
+        const response = await authFetch(`/api/progress/${lessonId}/complete`, {
+          method: "POST"
+        });
+        return response.json();
+      }
+    },
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/progress", courseId] });
+      queryClient.invalidateQueries({ queryKey: ["/api/enrollments", courseId] });
+      queryClient.invalidateQueries({ queryKey: ["/api/certificates/my"] });
+      
+      // Check if certificate was issued
+      if (result?.data?.certificate) {
+        toast({
+          title: "🎉 Congratulations!",
+          description: result.data.message || "You've completed the course and earned a certificate!",
+          duration: 5000,
+        });
+      }
     },
   });
 
@@ -194,7 +244,7 @@ export default function CoursePlayer() {
   }, [activeLesson?.id]);
 
   const isLessonCompleted = (lessonId: string) => {
-    return lessonProgress?.some((p) => p.lessonId === lessonId && p.completed);
+    return lessonProgress?.some((p) => p.lessonId === lessonId && p.completed) ?? false;
   };
 
   const getTotalLessons = () => {
@@ -264,6 +314,31 @@ export default function CoursePlayer() {
             </div>
           )}
         </div>
+
+        {/* Course Completion Banner */}
+        {courseCertificate && progressPercent === 100 && (
+          <div className="p-4 bg-gradient-to-r from-green-500/10 to-emerald-500/10 border-t border-green-500/20">
+            <div className="flex items-center gap-3">
+              <div className="p-2 rounded-full bg-green-500/20">
+                <Award className="h-6 w-6 text-green-600" />
+              </div>
+              <div className="flex-1">
+                <h3 className="font-semibold text-green-900 dark:text-green-100">
+                  🎉 Congratulations! Course Completed
+                </h3>
+                <p className="text-sm text-green-700 dark:text-green-300">
+                  You've earned a certificate of completion
+                </p>
+              </div>
+              <Link href={`/certificate/${courseCertificate.id}`}>
+                <Button variant="default" className="gap-2">
+                  <Award className="h-4 w-4" />
+                  View Certificate
+                </Button>
+              </Link>
+            </div>
+          </div>
+        )}
 
         {/* Video Controls */}
         <div className="p-4 bg-background border-t">
@@ -361,7 +436,9 @@ export default function CoursePlayer() {
                         </AccordionTrigger>
                         <AccordionContent>
                           <div className="space-y-1">
-                            {sectionLessons.map((lesson, lessonIndex) => (
+                            {sectionLessons.map((lesson, lessonIndex) => {
+                              const isCompleted = isLessonCompleted(lesson.id);
+                              return (
                               <button
                                 key={lesson.id}
                                 onClick={() => setActiveLesson(lesson)}
@@ -373,8 +450,14 @@ export default function CoursePlayer() {
                                 data-testid={`button-lesson-${lesson.id}`}
                               >
                                 <Checkbox
-                                  checked={isLessonCompleted(lesson.id)}
-                                  className="pointer-events-none"
+                                  checked={isCompleted}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    toggleLessonCompleteMutation.mutate({
+                                      lessonId: lesson.id,
+                                      completed: isCompleted,
+                                    });
+                                  }}
                                 />
                                 <div className="flex-1 min-w-0">
                                   <p className="truncate">{lessonIndex + 1}. {lesson.title}</p>
@@ -386,7 +469,8 @@ export default function CoursePlayer() {
                                   <Play className="h-4 w-4 text-primary" />
                                 )}
                               </button>
-                            ))}
+                              );
+                            })}
                           </div>
                         </AccordionContent>
                       </AccordionItem>

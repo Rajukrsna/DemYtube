@@ -149,6 +149,7 @@ export const certificates = pgTable("certificates", {
   issuedAt: timestamp("issued_at").defaultNow(),
   userName: varchar("user_name"),
   courseName: varchar("course_name"),
+  totalDuration: integer("total_duration").default(0), // in seconds
 });
 
 // Transactions for payments

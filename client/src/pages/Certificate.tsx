@@ -132,6 +132,11 @@ export default function CertificatePage() {
                   <CheckCircle className="h-5 w-5 text-green-500" />
                   <span>Completed on {formatDate(certificate.issuedAt)}</span>
                 </div>
+                {(((certificate as any).totalDuration != null || (certificate as any).courseTotalDuration != null)) && (
+                  <div className="text-muted-foreground">
+                    <span>Total Course Duration: {Math.round(((certificate as any).totalDuration ?? (certificate as any).courseTotalDuration ?? 0) / 3600)} hours</span>
+                  </div>
+                )}
               </div>
 
               {/* Footer */}

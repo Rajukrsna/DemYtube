@@ -310,14 +310,38 @@ console.log("Updated watch time:", progress);
       // Check if course is complete and issue certificate
       const lesson = await storage.getLesson(req.params.lessonId);
       if (lesson) {
-        // Get section to find course
-        const sections = await storage.getSectionsByCourse("");
-        // This is simplified - in production, trace back to course properly
+        const section = await storage.getSection(lesson.sectionId);
+        if (section) {
+          const certificate = await storage.checkAndIssueCertificate(req.auth.userId, section.courseId);
+          if (certificate) {
+            return res.json({ 
+              success: true, 
+              data: progress,
+              certificate,
+              message: "Congratulations! You've completed the course and earned a certificate!"
+            });
+          }
+        }
       }
 
       res.json({ success: true, data: progress });
     } catch (error) {
       console.error("Error marking complete:", error);
+      res.status(500).json({ success: false, message: "Failed to update progress" });
+    }
+  });
+
+  // Mark lesson incomplete (uncheck)
+  app.post("/api/progress/:lessonId/uncomplete", authenticateUser, async (req, res) => {
+    try {
+      if (!req.auth?.userId) {
+        return res.status(401).json({ success: false, message: "Unauthorized" });
+      }
+      
+      const progress = await storage.markLessonIncomplete(req.auth.userId, req.params.lessonId);
+      res.json({ success: true, data: progress });
+    } catch (error) {
+      console.error("Error marking incomplete:", error);
       res.status(500).json({ success: false, message: "Failed to update progress" });
     }
   });
@@ -624,6 +648,8 @@ console.log("Updated watch time:", progress);
       }
 
       // Generate simple PDF (in production, use a proper PDF library)
+      const duration = certificate.totalDuration || certificate.courseTotalDuration || 0;
+      const totalHours = duration ? Math.round(duration / 3600) : 0;
       const pdfContent = `
         Certificate of Completion
         
@@ -631,6 +657,7 @@ console.log("Updated watch time:", progress);
         has successfully completed the course
         "${certificate.courseName}"
         
+        Total Course Duration: ${totalHours} hours
         Issued: ${certificate.issuedAt}
         Certificate ID: ${certificate.uniqueId}
       `;
