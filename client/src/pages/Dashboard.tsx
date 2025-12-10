@@ -15,7 +15,8 @@ import {
   CheckCircle, 
   Play,
   GraduationCap,
-  ArrowRight
+  ArrowRight,
+  PlusCircle
 } from "lucide-react";
 import type { EnrollmentWithCourse, Certificate } from "@shared/schema";
 
@@ -46,11 +47,24 @@ export default function Dashboard() {
     enabled: isAuthenticated,
   });
 
+  const { data: myCourses } = useQuery<any[]>({
+    queryKey: ["/api/courses/my"],
+    enabled: isAuthenticated,
+  });
+
+  const { data: watchTimeData } = useQuery<{ totalSeconds: number }>({
+    queryKey: ["/api/users/watch-time"],
+    enabled: isAuthenticated,
+  });
+
+  const totalHoursWatched = Math.floor((watchTimeData?.totalSeconds || 0) / 3600);
+
   const stats = {
     enrolled: enrollments?.length || 0,
     completed: enrollments?.filter((e) => e.completedAt)?.length || 0,
-    hoursWatched: 0,
+    hoursWatched: totalHoursWatched,
     certificates: certificates?.length || 0,
+    coursesCreated: myCourses?.length || 0,
   };
 
   const inProgressCourses = enrollments?.filter((e) => !e.completedAt) || [];
@@ -83,7 +97,7 @@ export default function Dashboard() {
         </div>
 
         {/* Stats Overview */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 md:gap-6 mb-8">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4 md:gap-6 mb-8">
           <Card data-testid="card-stat-enrolled">
             <CardContent className="p-6">
               <div className="flex items-center gap-4">
@@ -93,6 +107,20 @@ export default function Dashboard() {
                 <div>
                   <p className="text-3xl font-bold">{stats.enrolled}</p>
                   <p className="text-sm text-muted-foreground">Enrolled Courses</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card data-testid="card-stat-created">
+            <CardContent className="p-6">
+              <div className="flex items-center gap-4">
+                <div className="p-3 rounded-full bg-purple-500/10">
+                  <PlusCircle className="h-6 w-6 text-purple-500" />
+                </div>
+                <div>
+                  <p className="text-3xl font-bold">{stats.coursesCreated}</p>
+                  <p className="text-sm text-muted-foreground">Courses Created</p>
                 </div>
               </div>
             </CardContent>

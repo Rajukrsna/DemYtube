@@ -195,6 +195,21 @@ export async function registerRoutes(
     }
   });
 
+  // Get total watch time for user
+  app.get("/api/users/watch-time", authenticateUser, async (req, res) => {
+    try {
+      if (!req.auth?.userId) {
+        return res.status(401).json({ success: false, message: "Unauthorized" });
+      }
+      
+      const totalSeconds = await storage.getTotalWatchTime(req.auth.userId);
+      res.json({ success: true, data: { totalSeconds } });
+    } catch (error) {
+      console.error("Error fetching watch time:", error);
+      res.status(500).json({ success: false, message: "Failed to fetch watch time" });
+    }
+  });
+
   // Get single enrollment
   app.get("/api/enrollments/:courseId", authenticateUser, async (req, res) => {
     try {
@@ -259,6 +274,27 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error fetching progress:", error);
       res.status(500).json({ success: false, message: "Failed to fetch progress" });
+    }
+  });
+
+  // Update watch time for lesson
+  app.post("/api/progress/:lessonId/watch-time", authenticateUser, async (req, res) => {
+    try {
+      if (!req.auth?.userId) {
+        return res.status(401).json({ success: false, message: "Unauthorized" });
+      }
+      
+      const { watchedSeconds } = req.body;
+      const progress = await storage.updateLessonWatchTime(
+        req.auth.userId,
+        req.params.lessonId,
+        watchedSeconds
+      );
+console.log("Updated watch time:", progress);
+      res.json({ success: true, data: progress });
+    } catch (error) {
+      console.error("Error updating watch time:", error);
+      res.status(500).json({ success: false, message: "Failed to update watch time" });
     }
   });
 

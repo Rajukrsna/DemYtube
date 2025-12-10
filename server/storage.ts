@@ -77,7 +77,9 @@ export interface IStorage {
   // Lesson Progress
   getLessonProgress(userId: string, courseId: string): Promise<LessonProgress[]>;
   upsertLessonProgress(progress: InsertLessonProgress): Promise<LessonProgress>;
+  updateLessonWatchTime(userId: string, lessonId: string, watchedSeconds: number): Promise<LessonProgress>;
   markLessonComplete(userId: string, lessonId: string): Promise<LessonProgress>;
+  getTotalWatchTime(userId: string): Promise<number>;
 
   // Quizzes
   getQuizByCourse(courseId: string): Promise<(Quiz & { questions: Question[] }) | undefined>;
@@ -357,9 +359,21 @@ export class DatabaseStorage implements IStorage {
       );
 
     if (existing.length > 0) {
+      // Merge with existing data to avoid overwriting fields
+      const updateData: any = {};
+      if (progressData.watchedSeconds !== undefined) {
+        updateData.watchedSeconds = progressData.watchedSeconds;
+      }
+      if (progressData.completed !== undefined) {
+        updateData.completed = progressData.completed;
+      }
+      if (progressData.completedAt !== undefined) {
+        updateData.completedAt = progressData.completedAt;
+      }
+
       const [updated] = await db
         .update(lessonProgress)
-        .set(progressData)
+        .set(updateData)
         .where(eq(lessonProgress.id, existing[0].id))
         .returning();
       return updated;
@@ -369,6 +383,14 @@ export class DatabaseStorage implements IStorage {
     return progress;
   }
 
+  async updateLessonWatchTime(userId: string, lessonId: string, watchedSeconds: number): Promise<LessonProgress> {
+    return this.upsertLessonProgress({
+      userId,
+      lessonId,
+      watchedSeconds,
+    });
+  }
+
   async markLessonComplete(userId: string, lessonId: string): Promise<LessonProgress> {
     return this.upsertLessonProgress({
       userId,
@@ -376,6 +398,15 @@ export class DatabaseStorage implements IStorage {
       completed: true,
       completedAt: new Date(),
     });
+  }
+
+  async getTotalWatchTime(userId: string): Promise<number> {
+    const result = await db
+      .select({ total: sql<number>`COALESCE(SUM(${lessonProgress.watchedSeconds}), 0)` })
+      .from(lessonProgress)
+      .where(eq(lessonProgress.userId, userId));
+    
+    return result[0]?.total || 0;
   }
 
   // Quizzes

@@ -51,6 +51,8 @@ export default function CoursePlayer() {
   const [quizSubmitted, setQuizSubmitted] = useState(false);
   const [quizScore, setQuizScore] = useState<number | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const watchTimeRef = useRef<number>(0);
+  const watchTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     if (!authLoading && !isAuthenticated) {
@@ -88,6 +90,15 @@ export default function CoursePlayer() {
   const { data: quiz } = useQuery<Quiz & { questions: QuizQuestion[] }>({
     queryKey: ["/api/quizzes", courseId],
     enabled: !!courseId,
+  });
+
+  const updateWatchTimeMutation = useMutation({
+    mutationFn: async ({ lessonId, seconds }: { lessonId: string; seconds: number }) => {
+      await authFetch(`/api/progress/${lessonId}/watch-time`, {
+        method: "POST",
+        body: JSON.stringify({ watchedSeconds: seconds })
+      });
+    },
   });
 
   const markCompleteMutation = useMutation({
@@ -146,6 +157,41 @@ export default function CoursePlayer() {
       }
     }
   }, [course]);
+
+  // Track watch time for active lesson
+  useEffect(() => {
+    if (!activeLesson) return;
+
+    // Reset watch time when lesson changes
+    watchTimeRef.current = 0;
+
+    // Start timer to track watch time
+    watchTimerRef.current = setInterval(() => {
+      watchTimeRef.current += 1;
+
+      // Save watch time every 10 seconds
+      if (watchTimeRef.current % 10 === 0) {
+        updateWatchTimeMutation.mutate({
+          lessonId: activeLesson.id,
+          seconds: watchTimeRef.current,
+        });
+      }
+    }, 1000);
+
+    // Cleanup on lesson change or unmount
+    return () => {
+      if (watchTimerRef.current) {
+        clearInterval(watchTimerRef.current);
+        // Save final watch time
+        if (watchTimeRef.current > 0) {
+          updateWatchTimeMutation.mutate({
+            lessonId: activeLesson.id,
+            seconds: watchTimeRef.current,
+          });
+        }
+      }
+    };
+  }, [activeLesson?.id]);
 
   const isLessonCompleted = (lessonId: string) => {
     return lessonProgress?.some((p) => p.lessonId === lessonId && p.completed);

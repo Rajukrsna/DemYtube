@@ -21,6 +21,49 @@ import {
 } from "lucide-react";
 import type { CourseWithInstructor } from "@shared/schema";
 
+interface CircularProgressProps {
+  percentage: number;
+  size?: number;
+  strokeWidth?: number;
+}
+
+function CircularProgress({ percentage, size = 60, strokeWidth = 4 }: CircularProgressProps) {
+  const radius = (size - strokeWidth) / 2;
+  const circumference = radius * 2 * Math.PI;
+  const offset = circumference - (percentage / 100) * circumference;
+
+  return (
+    <div className="relative flex items-center justify-center" style={{ width: size, height: size }}>
+      <svg width={size} height={size} className="transform -rotate-90">
+        {/* Background circle */}
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={radius}
+          stroke="currentColor"
+          strokeWidth={strokeWidth}
+          fill="none"
+          className="text-muted"
+        />
+        {/* Progress circle */}
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={radius}
+          stroke="currentColor"
+          strokeWidth={strokeWidth}
+          fill="none"
+          strokeDasharray={circumference}
+          strokeDashoffset={offset}
+          strokeLinecap="round"
+          className="text-primary transition-all duration-300"
+        />
+      </svg>
+      <span className="absolute text-xs font-semibold">{percentage}%</span>
+    </div>
+  );
+}
+
 export default function MyCourses() {
   const { user, isAuthenticated, isLoading: authLoading } = useAuth();
   const { toast } = useToast();
@@ -42,6 +85,16 @@ export default function MyCourses() {
     queryKey: ["/api/courses/my"],
     enabled: isAuthenticated,
   });
+
+  const { data: enrollments } = useQuery<any[]>({
+    queryKey: ["/api/enrollments/my"],
+    enabled: isAuthenticated,
+  });
+
+  // Map course progress from enrollments
+  const courseProgress = new Map(
+    enrollments?.map(e => [e.courseId, e.progressPercent || 0]) || []
+  );
 
   const draftCourses = courses?.filter((c) => c.status === "draft") || [];
   const pendingCourses = courses?.filter((c) => c.status === "pending") || [];
@@ -127,6 +180,12 @@ export default function MyCourses() {
               </div>
             )}
           </div>
+
+          {courseProgress.has(course.id) && (
+            <div className="flex items-center justify-center px-4">
+              <CircularProgress percentage={courseProgress.get(course.id) || 0} />
+            </div>
+          )}
 
           <div className="flex flex-col gap-2">
             {course.status === "approved" && (

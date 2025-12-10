@@ -35,6 +35,13 @@ export function Navbar() {
                 Browse Courses
               </Button>
             </Link>
+            {isAuthenticated && (
+              <Link href="/my-courses">
+                <Button variant="ghost" size="sm" data-testid="link-my-courses">
+                  My Courses
+                </Button>
+              </Link>
+            )}
           </nav>
         </div>
 
