@@ -4,6 +4,7 @@ import { storage } from "./storage";
 import { authenticateUser, optionalAuth } from "./auth";
 import { randomUUID } from "crypto";
 import OpenAI from "openai";
+import { google } from "googleapis";
 
 function getOpenAI(): OpenAI | null {
   if (!process.env.OPENAI_API_KEY) {
@@ -12,6 +13,18 @@ function getOpenAI(): OpenAI | null {
   return new OpenAI({
     apiKey: process.env.OPENAI_API_KEY,
   });
+}
+
+// Parse YouTube duration (ISO 8601) to seconds
+function parseYouTubeDuration(duration: string): number {
+  const match = duration.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
+  if (!match) return 0;
+  
+  const hours = parseInt(match[1] || '0');
+  const minutes = parseInt(match[2] || '0');
+  const seconds = parseInt(match[3] || '0');
+  
+  return hours * 3600 + minutes * 60 + seconds;
 }
 
 export async function registerRoutes(
@@ -161,8 +174,57 @@ export async function registerRoutes(
         return res.status(400).json({ success: false, message: "Video ID required" });
       }
 
-      // In a real app, you'd call YouTube API here
-      // For now, return mock data
+      // Check if YouTube API key is available
+      if (!process.env.YOUTUBE_API_KEY) {
+        console.log("YouTube API key not found, using mock data");
+        return res.json({
+          success: true,
+          data: {
+            videoId,
+            title: `Video ${videoId.substring(0, 8)}`,
+            duration: Math.floor(Math.random() * 600) + 120, // 2-12 minutes
+            thumbnail: `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`,
+          }
+        });
+      }
+
+      // Use YouTube Data API v3
+      const youtube = google.youtube({
+        version: 'v3',
+        auth: process.env.YOUTUBE_API_KEY
+      });
+
+      const response = await youtube.videos.list({
+        part: ['snippet', 'contentDetails'],
+        id: [videoId]
+      });
+
+      if (!response.data.items || response.data.items.length === 0) {
+        return res.status(404).json({ success: false, message: "Video not found" });
+      }
+
+      const video = response.data.items[0];
+      const title = video.snippet?.title || `Video ${videoId.substring(0, 8)}`;
+      console.log("Fetched video duration:", video.contentDetails?.duration);
+      const duration = parseYouTubeDuration(video.contentDetails?.duration || 'PT0S');
+      const thumbnail = video.snippet?.thumbnails?.maxres?.url || 
+                       video.snippet?.thumbnails?.high?.url ||
+                       `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`;
+
+      res.json({
+        success: true,
+        data: {
+          videoId,
+          title,
+          duration,
+          thumbnail,
+        }
+      });
+    } catch (error) {
+      console.error("Error fetching YouTube info:", error);
+      
+      // Fallback to mock data on API errors
+      const { videoId } = req.body;
       res.json({
         success: true,
         data: {
@@ -172,9 +234,6 @@ export async function registerRoutes(
           thumbnail: `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`,
         }
       });
-    } catch (error) {
-      console.error("Error fetching YouTube info:", error);
-      res.status(500).json({ success: false, message: "Failed to fetch video info" });
     }
   });
 
@@ -605,6 +664,75 @@ console.log("Updated watch time:", progress);
     } catch (error) {
       console.error("Error sending chat:", error);
       res.status(500).json({ success: false, message: "Failed to send message" });
+    }
+  });
+
+  // ============ NOTES ROUTES ============
+  
+  // Get lesson notes for a course
+  app.get("/api/notes/:courseId", authenticateUser, async (req, res) => {
+    try {
+      if (!req.auth?.userId) {
+        return res.status(401).json({ success: false, message: "Unauthorized" });
+      }
+      
+      const notes = await storage.getLessonNotes(req.auth.userId, req.params.courseId);
+      res.json({ success: true, data: notes });
+    } catch (error) {
+      console.error("Error fetching notes:", error);
+      res.status(500).json({ success: false, message: "Failed to fetch notes" });
+    }
+  });
+
+  // Create a new note
+  app.post("/api/notes", authenticateUser, async (req, res) => {
+    try {
+      if (!req.auth?.userId) {
+        return res.status(401).json({ success: false, message: "Unauthorized" });
+      }
+      
+      const { content, timestamp, lessonId } = req.body;
+      
+      if (!content || !lessonId) {
+        return res.status(400).json({ success: false, message: "Content and lessonId are required" });
+      }
+
+      // Get lesson to verify it belongs to the course and user has access
+      const lesson = await storage.getLesson(lessonId);
+      if (!lesson) {
+        return res.status(404).json({ success: false, message: "Lesson not found" });
+      }
+
+      // Get section to find the course
+      const section = await storage.getSection(lesson.sectionId);
+      if (!section) {
+        return res.status(404).json({ success: false, message: "Section not found" });
+      }
+
+      // Get course to verify user has access
+      const course = await storage.getCourse(section.courseId);
+      if (!course) {
+        return res.status(404).json({ success: false, message: "Course not found" });
+      }
+
+      // Check if user is enrolled or is the instructor
+      const enrollment = await storage.getEnrollment(req.auth.userId, section.courseId);
+      if (!enrollment && course.instructorId !== req.auth.userId) {
+        return res.status(403).json({ success: false, message: "Access denied" });
+      }
+
+      const note = await storage.createLessonNote({
+        userId: req.auth.userId,
+        lessonId,
+        courseId: section.courseId,
+        timestamp: timestamp || 0,
+        content,
+      });
+
+      res.json({ success: true, data: note });
+    } catch (error) {
+      console.error("Error creating note:", error);
+      res.status(500).json({ success: false, message: "Failed to create note" });
     }
   });
 

@@ -140,6 +140,18 @@ export const chatMessages = pgTable("chat_messages", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+// User notes for lessons
+export const lessonNotes = pgTable("lesson_notes", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  lessonId: varchar("lesson_id").notNull().references(() => lessons.id, { onDelete: "cascade" }),
+  courseId: varchar("course_id").notNull().references(() => courses.id, { onDelete: "cascade" }),
+  timestamp: integer("timestamp").notNull(), // Video timestamp in seconds
+  content: text("content").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
 // Certificates
 export const certificates = pgTable("certificates", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -224,6 +236,21 @@ export const questionsRelations = relations(questions, ({ one }) => ({
   }),
 }));
 
+export const lessonNotesRelations = relations(lessonNotes, ({ one }) => ({
+  user: one(users, {
+    fields: [lessonNotes.userId],
+    references: [users.id],
+  }),
+  lesson: one(lessons, {
+    fields: [lessonNotes.lessonId],
+    references: [lessons.id],
+  }),
+  course: one(courses, {
+    fields: [lessonNotes.courseId],
+    references: [courses.id],
+  }),
+}));
+
 // Insert schemas
 export const insertUserSchema = createInsertSchema(users).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertCourseSchema = createInsertSchema(courses).omit({ id: true, createdAt: true, updatedAt: true, enrollmentCount: true, completionCount: true, viewCount: true });
@@ -235,6 +262,7 @@ export const insertQuizSchema = createInsertSchema(quizzes).omit({ id: true, cre
 export const insertQuestionSchema = createInsertSchema(questions).omit({ id: true });
 export const insertQuizAttemptSchema = createInsertSchema(quizAttempts).omit({ id: true, completedAt: true });
 export const insertChatMessageSchema = createInsertSchema(chatMessages).omit({ id: true, createdAt: true });
+export const insertLessonNoteSchema = createInsertSchema(lessonNotes).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertCertificateSchema = createInsertSchema(certificates).omit({ id: true, issuedAt: true });
 export const insertTransactionSchema = createInsertSchema(transactions).omit({ id: true, createdAt: true });
 
@@ -259,6 +287,8 @@ export type QuizAttempt = typeof quizAttempts.$inferSelect;
 export type InsertQuizAttempt = z.infer<typeof insertQuizAttemptSchema>;
 export type ChatMessage = typeof chatMessages.$inferSelect;
 export type InsertChatMessage = z.infer<typeof insertChatMessageSchema>;
+export type LessonNote = typeof lessonNotes.$inferSelect;
+export type InsertLessonNote = z.infer<typeof insertLessonNoteSchema>;
 export type Certificate = typeof certificates.$inferSelect;
 export type InsertCertificate = z.infer<typeof insertCertificateSchema>;
 export type Transaction = typeof transactions.$inferSelect;

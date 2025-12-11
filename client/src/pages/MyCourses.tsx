@@ -100,6 +100,8 @@ export default function MyCourses() {
   const pendingCourses = courses?.filter((c) => c.status === "pending") || [];
   const approvedCourses = courses?.filter((c) => c.status === "approved") || [];
   const rejectedCourses = courses?.filter((c) => c.status === "rejected") || [];
+  const freeCourses = courses?.filter((c) => !c.isPublic) || [];
+  const marketplaceCourses = courses?.filter((c) => c.isPublic && c.status === "approved") || [];
 
   const getStatusBadge = (status: string) => {
     switch (status) {
@@ -181,14 +183,12 @@ export default function MyCourses() {
             )}
           </div>
 
-          {courseProgress.has(course.id) && (
-            <div className="flex items-center justify-center px-4">
-              <CircularProgress percentage={courseProgress.get(course.id) || 0} />
-            </div>
-          )}
+          <div className="flex items-center justify-center px-4">
+            <CircularProgress percentage={courseProgress.get(course.id) || 0} />
+          </div>
 
           <div className="flex flex-col gap-2">
-            {course.status === "approved" && (
+            {course.isPublic && course.status === "approved" && (
               <Link href={`/course/${course.id}/analytics`}>
                 <Button variant="outline" size="sm" className="gap-1" data-testid={`button-analytics-${course.id}`}>
                   <BarChart className="h-4 w-4" />
@@ -250,11 +250,14 @@ export default function MyCourses() {
               <TabsTrigger value="all" data-testid="tab-all">
                 All ({courses.length})
               </TabsTrigger>
-              <TabsTrigger value="published" data-testid="tab-published">
-                Published ({approvedCourses.length})
+              <TabsTrigger value="free" data-testid="tab-free">
+                Free ({freeCourses.length})
+              </TabsTrigger>
+              <TabsTrigger value="marketplace" data-testid="tab-marketplace">
+                Published to Marketplace ({marketplaceCourses.length})
               </TabsTrigger>
               <TabsTrigger value="pending" data-testid="tab-pending">
-                Pending ({pendingCourses.length})
+                Pending Review ({pendingCourses.length})
               </TabsTrigger>
               <TabsTrigger value="rejected" data-testid="tab-rejected">
                 Rejected ({rejectedCourses.length})
@@ -265,13 +268,30 @@ export default function MyCourses() {
               {courses.map(renderCourseCard)}
             </TabsContent>
 
-            <TabsContent value="published" className="space-y-4">
-              {approvedCourses.length > 0 ? (
-                approvedCourses.map(renderCourseCard)
+            <TabsContent value="free" className="space-y-4">
+              {freeCourses.length > 0 ? (
+                freeCourses.map(renderCourseCard)
+              ) : (
+                <Card className="p-8 text-center">
+                  <BookOpen className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
+                  <p className="text-muted-foreground">No personal courses yet</p>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    Create courses for your personal use
+                  </p>
+                </Card>
+              )}
+            </TabsContent>
+
+            <TabsContent value="marketplace" className="space-y-4">
+              {marketplaceCourses.length > 0 ? (
+                marketplaceCourses.map(renderCourseCard)
               ) : (
                 <Card className="p-8 text-center">
                   <CheckCircle className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
-                  <p className="text-muted-foreground">No published courses yet</p>
+                  <p className="text-muted-foreground">No courses published to marketplace</p>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    Submit courses for marketplace approval to reach more students
+                  </p>
                 </Card>
               )}
             </TabsContent>

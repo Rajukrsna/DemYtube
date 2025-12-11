@@ -179,6 +179,7 @@ export default function CreateCourse() {
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["/api/courses"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/courses/my"] });
       const isPublic = form.getValues("isPublic");
       toast({
         title: "Course Created",

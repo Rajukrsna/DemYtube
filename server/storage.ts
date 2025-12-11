@@ -11,6 +11,7 @@ import {
   questions,
   quizAttempts,
   chatMessages,
+  lessonNotes,
   certificates,
   transactions,
   type User,
@@ -33,6 +34,8 @@ import {
   type InsertQuizAttempt,
   type ChatMessage,
   type InsertChatMessage,
+  type LessonNote,
+  type InsertLessonNote,
   type Certificate,
   type InsertCertificate,
   type Transaction,
@@ -96,6 +99,10 @@ export interface IStorage {
   // Chat Messages
   getChatMessages(userId: string, courseId: string): Promise<ChatMessage[]>;
   createChatMessage(message: InsertChatMessage): Promise<ChatMessage>;
+
+  // Lesson Notes
+  getLessonNotes(userId: string, courseId: string): Promise<LessonNote[]>;
+  createLessonNote(note: InsertLessonNote): Promise<LessonNote>;
 
   // Certificates
   getCertificate(id: string): Promise<Certificate & { courseTotalDuration?: number } | undefined>;
@@ -539,6 +546,20 @@ export class DatabaseStorage implements IStorage {
   async createChatMessage(messageData: InsertChatMessage): Promise<ChatMessage> {
     const [message] = await db.insert(chatMessages).values(messageData).returning();
     return message;
+  }
+
+  // Lesson Notes
+  async getLessonNotes(userId: string, courseId: string): Promise<LessonNote[]> {
+    return db
+      .select()
+      .from(lessonNotes)
+      .where(and(eq(lessonNotes.userId, userId), eq(lessonNotes.courseId, courseId)))
+      .orderBy(desc(lessonNotes.createdAt));
+  }
+
+  async createLessonNote(noteData: InsertLessonNote): Promise<LessonNote> {
+    const [note] = await db.insert(lessonNotes).values(noteData).returning();
+    return note;
   }
 
   // Certificates

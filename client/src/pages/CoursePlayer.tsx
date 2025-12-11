@@ -5,6 +5,7 @@ import { queryClient } from "@/lib/queryClient";
 import { authFetch } from "@/lib/api";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
+import { formatDuration } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -33,10 +34,18 @@ import {
   Award,
   ChevronRight,
 } from "lucide-react";
-import type { CourseWithInstructor, SectionWithLessons, Lesson, ChatMessage, Quiz, Question, LessonProgress, Enrollment } from "@shared/schema";
+import type { CourseWithInstructor, SectionWithLessons, Lesson, ChatMessage, Quiz, Question, LessonProgress, Enrollment, LessonNote } from "@shared/schema";
 
 interface QuizQuestion extends Question {
   options: { id: string; text: string }[];
+}
+
+// YouTube Player API types
+declare global {
+  interface Window {
+    YT: any;
+    onYouTubeIframeAPIReady: () => void;
+  }
 }
 
 export default function CoursePlayer() {
@@ -50,9 +59,13 @@ export default function CoursePlayer() {
   const [quizAnswers, setQuizAnswers] = useState<Record<string, string>>({});
   const [quizSubmitted, setQuizSubmitted] = useState(false);
   const [quizScore, setQuizScore] = useState<number | null>(null);
+  const [noteInput, setNoteInput] = useState("");
+  const [capturedTimestamp, setCapturedTimestamp] = useState(0);
+  const [youtubePlayer, setYoutubePlayer] = useState<any>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const watchTimeRef = useRef<number>(0);
   const watchTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const playerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!authLoading && !isAuthenticated) {
@@ -90,6 +103,11 @@ export default function CoursePlayer() {
   const { data: quiz } = useQuery<Quiz & { questions: QuizQuestion[] }>({
     queryKey: ["/api/quizzes", courseId],
     enabled: !!courseId,
+  });
+
+  const { data: lessonNotes } = useQuery<LessonNote[]>({
+    queryKey: ["/api/notes", courseId],
+    enabled: !!courseId && isAuthenticated,
   });
 
   const { data: courseCertificate } = useQuery<any>({
@@ -147,11 +165,59 @@ export default function CoursePlayer() {
         return response.json();
       }
     },
+    onMutate: async ({ lessonId, completed }) => {
+      // Cancel any outgoing refetches
+      await queryClient.cancelQueries({ queryKey: ["/api/progress", courseId] });
+
+      // Snapshot the previous value
+      const previousProgress = queryClient.getQueryData(["/api/progress", courseId]);
+
+      // Optimistically update the progress
+      queryClient.setQueryData(["/api/progress", courseId], (old: LessonProgress[] | undefined) => {
+        if (!old) return old;
+
+        const newProgress = old.map(progress =>
+          progress.lessonId === lessonId
+            ? { ...progress, completed: !completed }
+            : progress
+        );
+
+        // If we're marking as complete and the lesson wasn't in progress before, add it
+        const exists = newProgress.some(p => p.lessonId === lessonId);
+        if (!exists && !completed) {
+          newProgress.push({
+            id: `temp-${lessonId}`,
+            lessonId,
+            completed: true,
+            watchTime: 0,
+            userId: "",
+            createdAt: new Date(),
+            updatedAt: new Date()
+          });
+        }
+
+        return newProgress;
+      });
+
+      // Return a context object with the snapshotted value
+      return { previousProgress };
+    },
+    onError: (err, variables, context) => {
+      // If the mutation fails, use the context returned from onMutate to roll back
+      if (context?.previousProgress) {
+        queryClient.setQueryData(["/api/progress", courseId], context.previousProgress);
+      }
+      toast({
+        title: "Error",
+        description: "Failed to update lesson progress. Please try again.",
+        variant: "destructive",
+      });
+    },
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ["/api/progress", courseId] });
       queryClient.invalidateQueries({ queryKey: ["/api/enrollments", courseId] });
       queryClient.invalidateQueries({ queryKey: ["/api/certificates/my"] });
-      
+
       // Check if certificate was issued
       if (result?.data?.certificate) {
         toast({
@@ -195,6 +261,30 @@ export default function CoursePlayer() {
     },
   });
 
+  const saveNoteMutation = useMutation({
+    mutationFn: async (noteData: { content: string; timestamp: number; lessonId: string }) => {
+      await authFetch("/api/notes", {
+        method: "POST",
+        body: JSON.stringify(noteData)
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/notes", courseId] });
+      setNoteInput("");
+      toast({
+        title: "Note Saved",
+        description: "Your note has been saved successfully",
+      });
+    },
+    onError: (error) => {
+      toast({
+        title: "Failed to save note",
+        description: error.message || "Please try again",
+        variant: "destructive",
+      });
+    },
+  });
+
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [chatMessages]);
@@ -207,6 +297,57 @@ export default function CoursePlayer() {
       }
     }
   }, [course]);
+
+  // Load YouTube IFrame Player API
+  useEffect(() => {
+    if (!window.YT) {
+      const script = document.createElement('script');
+      script.src = 'https://www.youtube.com/iframe_api';
+      script.async = true;
+      document.body.appendChild(script);
+      
+      window.onYouTubeIframeAPIReady = () => {
+        // API is ready
+      };
+    }
+  }, []);
+
+  // Initialize YouTube player when active lesson changes
+  useEffect(() => {
+    if (activeLesson && window.YT && window.YT.Player) {
+      if (youtubePlayer) {
+        youtubePlayer.destroy();
+      }
+      
+      const player = new window.YT.Player(playerRef.current, {
+        height: '100%',
+        width: '100%',
+        videoId: activeLesson.youtubeVideoId,
+        playerVars: {
+          autoplay: 0,
+          rel: 0,
+          modestbranding: 1,
+        },
+        events: {
+          onReady: (event: any) => {
+            // Player is ready
+          },
+          onStateChange: (event: any) => {
+            // Handle play/pause events if needed
+          },
+        },
+      });
+      
+      setYoutubePlayer(player);
+    }
+
+    return () => {
+      if (youtubePlayer) {
+        youtubePlayer.destroy();
+        setYoutubePlayer(null);
+      }
+    };
+  }, [activeLesson?.id]);
 
   // Track watch time for active lesson
   useEffect(() => {
@@ -268,6 +409,42 @@ export default function CoursePlayer() {
     return `${mins}:${secs.toString().padStart(2, "0")}`;
   };
 
+  const captureCurrentTimestamp = () => {
+    if (youtubePlayer && youtubePlayer.getCurrentTime) {
+      const currentTime = Math.floor(youtubePlayer.getCurrentTime());
+      setCapturedTimestamp(currentTime);
+    } else {
+      // Fallback to watch time if player not ready
+      setCapturedTimestamp(watchTimeRef.current);
+    }
+  };
+
+  const seekToTimestamp = (timestamp: number) => {
+    if (youtubePlayer && youtubePlayer.seekTo) {
+      youtubePlayer.seekTo(timestamp, true);
+      toast({
+        title: "Seeking to timestamp",
+        description: `Jumping to ${formatDuration(timestamp)} in the video`,
+      });
+    } else {
+      toast({
+        title: "Player not ready",
+        description: "Please wait for the video to load before seeking",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleSaveNote = () => {
+    if (!noteInput.trim() || !activeLesson) return;
+    
+    saveNoteMutation.mutate({
+      content: noteInput.trim(),
+      timestamp: capturedTimestamp,
+      lessonId: activeLesson.id,
+    });
+  };
+
   if (authLoading || courseLoading) {
     return (
       <div className="h-screen flex">
@@ -300,14 +477,7 @@ export default function CoursePlayer() {
         {/* Video */}
         <div className="relative aspect-video bg-black">
           {activeLesson ? (
-            <iframe
-              src={getYouTubeEmbedUrl(activeLesson)}
-              title={activeLesson.title}
-              className="w-full h-full"
-              allowFullScreen
-              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-              data-testid="video-player"
-            />
+            <div ref={playerRef} className="w-full h-full" data-testid="video-player" />
           ) : (
             <div className="w-full h-full flex items-center justify-center text-white">
               <p>Select a lesson to begin</p>
@@ -377,6 +547,58 @@ export default function CoursePlayer() {
             )}
           </div>
         </div>
+
+        {/* Notes Input */}
+        {activeLesson && (
+          <div className="p-4 bg-background border-t">
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <FileText className="h-4 w-4 text-muted-foreground" />
+                <span className="text-sm font-medium">Take Notes</span>
+                <Badge variant={capturedTimestamp > 0 ? "outline" : "secondary"} className="text-xs">
+                  {capturedTimestamp > 0 ? formatDuration(capturedTimestamp) : "No timestamp"}
+                </Badge>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={captureCurrentTimestamp}
+                  className="h-6 px-2 text-xs"
+                  title="Capture current video timestamp"
+                >
+                  <Clock className="h-3 w-3 mr-1" />
+                  Capture
+                </Button>
+              </div>
+              <div className="flex gap-2">
+                <Input
+                  value={noteInput}
+                  onChange={(e) => setNoteInput(e.target.value)}
+                  onFocus={captureCurrentTimestamp}
+                  placeholder="Write your note here..."
+                  className="flex-1"
+                  data-testid="input-note"
+                />
+                <Button
+                  onClick={handleSaveNote}
+                  disabled={!noteInput.trim() || saveNoteMutation.isPending}
+                  data-testid="button-save-note"
+                >
+                  {saveNoteMutation.isPending ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <FileText className="h-4 w-4" />
+                  )}
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {capturedTimestamp > 0 
+                  ? `Note will be saved at ${formatDuration(capturedTimestamp)} in the video`
+                  : "Click 'Capture' or start typing to set the timestamp for your note"
+                }
+              </p>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Sidebar - Right Column (40%) */}
@@ -451,6 +673,7 @@ export default function CoursePlayer() {
                               >
                                 <Checkbox
                                   checked={isCompleted}
+                                  disabled={toggleLessonCompleteMutation.isPending}
                                   onClick={(e) => {
                                     e.stopPropagation();
                                     toggleLessonCompleteMutation.mutate({
@@ -645,11 +868,59 @@ export default function CoursePlayer() {
           <TabsContent value="notes" className="flex-1 m-0 mt-2">
             <ScrollArea className="h-[calc(100vh-280px)] lg:h-[calc(100vh-240px)]">
               <div className="px-4 pb-4">
-                <div className="text-center py-8 text-muted-foreground">
-                  <FileText className="h-12 w-12 mx-auto mb-4" />
-                  <p className="font-medium">Notes & Resources</p>
-                  <p className="text-sm mt-1">Course materials will appear here</p>
-                </div>
+                {lessonNotes && lessonNotes.length > 0 ? (
+                  <div className="space-y-4">
+                    {lessonNotes
+                      .sort((a, b) => b.timestamp - a.timestamp)
+                      .map((note) => {
+                        const lesson = course?.sections
+                          ?.flatMap(s => s.lessons || [])
+                          .find(l => l.id === note.lessonId);
+                        
+                        return (
+                          <Card key={note.id} data-testid={`card-note-${note.id}`}>
+                            <CardContent className="p-4">
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="flex-1">
+                                  <div className="flex items-center gap-2 mb-2">
+                                    <Badge 
+                                      variant="outline" 
+                                      className="text-xs cursor-pointer hover:bg-primary hover:text-primary-foreground transition-colors"
+                                      onClick={() => seekToTimestamp(note.timestamp)}
+                                      title="Click to jump to this timestamp in the video"
+                                    >
+                                      {formatDuration(note.timestamp)}
+                                    </Badge>
+                                    {lesson && (
+                                      <span className="text-xs text-muted-foreground">
+                                        {lesson.title}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <p className="text-sm whitespace-pre-wrap">{note.content}</p>
+                                  <p className="text-xs text-muted-foreground mt-2">
+                                    {new Date(note.createdAt).toLocaleDateString()} at{" "}
+                                    {new Date(note.createdAt).toLocaleTimeString([], {
+                                      hour: "2-digit",
+                                      minute: "2-digit",
+                                    })}
+                                  </p>
+                                </div>
+                              </div>
+                            </CardContent>
+                          </Card>
+                        );
+                      })}
+                  </div>
+                ) : (
+                  <div className="text-center py-8 text-muted-foreground">
+                    <FileText className="h-12 w-12 mx-auto mb-4" />
+                    <p className="font-medium">No notes yet</p>
+                    <p className="text-sm mt-1">
+                      Take notes while watching videos - they'll appear here with timestamps
+                    </p>
+                  </div>
+                )}
               </div>
             </ScrollArea>
           </TabsContent>
