@@ -1,11 +1,11 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { authenticateUser, optionalAuth } from "./auth";
-import { randomUUID } from "crypto";
-import OpenAI from "openai";
-import { google } from "googleapis";
-
+import { ragService } from "./rag";
+import {authenticateUser, optionalAuth} from "./auth"
+import { OpenAI } from "openai"
+import { google } from "googleapis"
+import {randomUUID} from "crypto"
 function getOpenAI(): OpenAI | null {
   if (!process.env.OPENAI_API_KEY) {
     return null;
@@ -622,41 +622,40 @@ console.log("Updated watch time:", progress);
         return res.status(404).json({ success: false, message: "Course not found" });
       }
 
-      // Generate AI response
-      let aiResponse = "I'm sorry, I couldn't process your question. Please try again.";
-      
-      const openai = getOpenAI();
-      if (openai) {
-        try {
-          const completion = await openai.chat.completions.create({
-            model: "gpt-4o",
-            messages: [
-              {
-                role: "system",
-                content: `You are a helpful course assistant for "${course.title}". 
-                Course description: ${course.description}
-                Help students understand the course content. Be concise and helpful.`,
-              },
-              {
-                role: "user",
-                content,
-              },
-            ],
-          });
-          aiResponse = completion.choices[0].message.content || aiResponse;
-        } catch (e) {
-          console.error("OpenAI error:", e);
-        }
-      } else {
-        aiResponse = `Thank you for your question about "${course.title}". This is a demo response - connect OpenAI API for real answers.`;
+      // Get all lessons in the course for RAG search
+      const sections = await storage.getSectionsByCourse(courseId);
+      const lessonIds = sections.flatMap(section => 
+        section.lessons.map(lesson => lesson.id)
+      );
+
+      // Perform semantic search across all course lessons
+      let relevantChunks: TextChunk[] = [];
+      try {
+        relevantChunks = await ragService.semanticSearch(content, undefined, 5);
+      } catch (error) {
+        console.error("RAG search failed:", error);
+        // Continue with empty chunks - RAG response will handle this
       }
 
-      // Save AI response
+      // Generate RAG-enhanced response
+      const { answer, sources } = await ragService.generateRAGResponse(
+        content,
+        course.title,
+        course.description || "",
+        relevantChunks
+      );
+
+      // Save AI response with sources
       const assistantMessage = await storage.createChatMessage({
         userId: req.auth.userId,
         courseId,
         role: "assistant",
-        content: aiResponse,
+        content: answer,
+        sources: sources.map(source => ({
+          lessonId: source.lessonId,
+          timestamp: source.timestamp,
+          snippet: source.snippet,
+        })),
       });
 
       const allMessages = await storage.getChatMessages(req.auth.userId, courseId);
@@ -664,6 +663,43 @@ console.log("Updated watch time:", progress);
     } catch (error) {
       console.error("Error sending chat:", error);
       res.status(500).json({ success: false, message: "Failed to send message" });
+    }
+  });
+
+  // ============ RAG PROCESSING ROUTES ============
+  
+  // Process a lesson for RAG (get transcript, chunk, embed)
+  app.post("/api/rag/process-lesson/:lessonId", authenticateUser, async (req, res) => {
+    try {
+      if (!req.auth?.userId) {
+        return res.status(401).json({ success: false, message: "Unauthorized" });
+      }
+
+      const lesson = await storage.getLesson(req.params.lessonId);
+      if (!lesson) {
+        return res.status(404).json({ success: false, message: "Lesson not found" });
+      }
+
+      // Check if user has access to this lesson's course
+      const enrollment = await storage.getEnrollment(req.auth.userId, lesson.sectionId); // Wait, this is wrong - need courseId
+      // Actually, let's get the course through the section
+      const section = await storage.getSection(lesson.sectionId);
+      if (!section) {
+        return res.status(404).json({ success: false, message: "Section not found" });
+      }
+
+      const enrollmentCheck = await storage.getEnrollment(req.auth.userId, section.courseId);
+      if (!enrollmentCheck) {
+        return res.status(403).json({ success: false, message: "Access denied" });
+      }
+
+      // Process the lesson for RAG
+      await ragService.processLessonForRAG(lesson);
+
+      res.json({ success: true, message: "Lesson processed for RAG successfully" });
+    } catch (error) {
+      console.error("Error processing lesson for RAG:", error);
+      res.status(500).json({ success: false, message: "Failed to process lesson" });
     }
   });
 

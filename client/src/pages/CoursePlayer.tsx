@@ -714,15 +714,50 @@ export default function CoursePlayer() {
                       key={msg.id}
                       className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
                     >
-                      <div
-                        className={`max-w-[80%] rounded-lg px-4 py-2 ${
-                          msg.role === "user"
-                            ? "bg-primary text-primary-foreground"
-                            : "bg-muted"
-                        }`}
-                        data-testid={`chat-message-${msg.id}`}
-                      >
-                        <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                      <div className="max-w-[80%]">
+                        <div
+                          className={`rounded-lg px-4 py-2 ${
+                            msg.role === "user"
+                              ? "bg-primary text-primary-foreground"
+                              : "bg-muted"
+                          }`}
+                          data-testid={`chat-message-${msg.id}`}
+                        >
+                          <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                        </div>
+                        
+                        {/* Display sources for assistant messages */}
+                        {msg.role === "assistant" && msg.sources && msg.sources.length > 0 && (
+                          <div className="mt-2 space-y-1">
+                            <p className="text-xs text-muted-foreground font-medium">Sources:</p>
+                            {msg.sources.map((source, index) => (
+                              <div key={index} className="flex items-center gap-2 text-xs">
+                                <Badge 
+                                  variant="outline" 
+                                  className="cursor-pointer hover:bg-primary hover:text-primary-foreground transition-colors"
+                                  onClick={() => {
+                                    // Find the lesson and seek to timestamp
+                                    const lesson = course?.sections
+                                      ?.flatMap(section => section.lessons || [])
+                                      .find(l => l.id === source.lessonId);
+                                    
+                                    if (lesson) {
+                                      setActiveLesson(lesson);
+                                      // Small delay to ensure video loads
+                                      setTimeout(() => seekToTimestamp(source.timestamp), 500);
+                                    }
+                                  }}
+                                  title="Click to jump to this timestamp in the video"
+                                >
+                                  {formatDuration(source.timestamp)}
+                                </Badge>
+                                <span className="text-muted-foreground truncate max-w-[200px]">
+                                  {source.snippet}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     </div>
                   ))

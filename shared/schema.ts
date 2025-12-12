@@ -152,6 +152,34 @@ export const lessonNotes = pgTable("lesson_notes", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+// Video transcripts for RAG
+export const videoTranscripts = pgTable("video_transcripts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  lessonId: varchar("lesson_id").notNull().references(() => lessons.id, { onDelete: "cascade" }),
+  transcript: text("transcript").notNull(), // Raw transcript text
+  source: varchar("source", { length: 20 }).notNull(), // 'youtube_captions', 'whisper_asr'
+  language: varchar("language", { length: 10 }).default("en"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => [index("IDX_video_transcripts_lesson").on(table.lessonId)]);
+
+// Text chunks for RAG (vectorized)
+export const textChunks = pgTable("text_chunks", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  lessonId: varchar("lesson_id").notNull().references(() => lessons.id, { onDelete: "cascade" }),
+  transcriptId: varchar("transcript_id").notNull().references(() => videoTranscripts.id, { onDelete: "cascade" }),
+  chunkIndex: integer("chunk_index").notNull(), // Order within the transcript
+  content: text("content").notNull(), // Chunked text content
+  startTime: integer("start_time").notNull(), // Start timestamp in seconds
+  endTime: integer("end_time").notNull(), // End timestamp in seconds
+  tokenCount: integer("token_count").notNull(), // Approximate token count
+  embedding: text("embedding"), // JSON string of embedding vector (will use pgvector extension)
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => [
+  index("IDX_text_chunks_lesson").on(table.lessonId),
+  index("IDX_text_chunks_transcript").on(table.transcriptId),
+]);
+
 // Certificates
 export const certificates = pgTable("certificates", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -251,6 +279,25 @@ export const lessonNotesRelations = relations(lessonNotes, ({ one }) => ({
   }),
 }));
 
+export const videoTranscriptsRelations = relations(videoTranscripts, ({ one, many }) => ({
+  lesson: one(lessons, {
+    fields: [videoTranscripts.lessonId],
+    references: [lessons.id],
+  }),
+  chunks: many(textChunks),
+}));
+
+export const textChunksRelations = relations(textChunks, ({ one }) => ({
+  lesson: one(lessons, {
+    fields: [textChunks.lessonId],
+    references: [lessons.id],
+  }),
+  transcript: one(videoTranscripts, {
+    fields: [textChunks.transcriptId],
+    references: [videoTranscripts.id],
+  }),
+}));
+
 // Insert schemas
 export const insertUserSchema = createInsertSchema(users).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertCourseSchema = createInsertSchema(courses).omit({ id: true, createdAt: true, updatedAt: true, enrollmentCount: true, completionCount: true, viewCount: true });
@@ -263,6 +310,8 @@ export const insertQuestionSchema = createInsertSchema(questions).omit({ id: tru
 export const insertQuizAttemptSchema = createInsertSchema(quizAttempts).omit({ id: true, completedAt: true });
 export const insertChatMessageSchema = createInsertSchema(chatMessages).omit({ id: true, createdAt: true });
 export const insertLessonNoteSchema = createInsertSchema(lessonNotes).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertVideoTranscriptSchema = createInsertSchema(videoTranscripts).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertTextChunkSchema = createInsertSchema(textChunks).omit({ id: true, createdAt: true });
 export const insertCertificateSchema = createInsertSchema(certificates).omit({ id: true, issuedAt: true });
 export const insertTransactionSchema = createInsertSchema(transactions).omit({ id: true, createdAt: true });
 
@@ -289,6 +338,10 @@ export type ChatMessage = typeof chatMessages.$inferSelect;
 export type InsertChatMessage = z.infer<typeof insertChatMessageSchema>;
 export type LessonNote = typeof lessonNotes.$inferSelect;
 export type InsertLessonNote = z.infer<typeof insertLessonNoteSchema>;
+export type VideoTranscript = typeof videoTranscripts.$inferSelect;
+export type InsertVideoTranscript = z.infer<typeof insertVideoTranscriptSchema>;
+export type TextChunk = typeof textChunks.$inferSelect;
+export type InsertTextChunk = z.infer<typeof insertTextChunkSchema>;
 export type Certificate = typeof certificates.$inferSelect;
 export type InsertCertificate = z.infer<typeof insertCertificateSchema>;
 export type Transaction = typeof transactions.$inferSelect;

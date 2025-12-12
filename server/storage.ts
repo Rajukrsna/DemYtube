@@ -12,6 +12,8 @@ import {
   quizAttempts,
   chatMessages,
   lessonNotes,
+  videoTranscripts,
+  textChunks,
   certificates,
   transactions,
   type User,
@@ -36,6 +38,10 @@ import {
   type InsertChatMessage,
   type LessonNote,
   type InsertLessonNote,
+  type VideoTranscript,
+  type InsertVideoTranscript,
+  type TextChunk,
+  type InsertTextChunk,
   type Certificate,
   type InsertCertificate,
   type Transaction,
@@ -103,6 +109,16 @@ export interface IStorage {
   // Lesson Notes
   getLessonNotes(userId: string, courseId: string): Promise<LessonNote[]>;
   createLessonNote(note: InsertLessonNote): Promise<LessonNote>;
+
+  // RAG - Video Transcripts
+  getVideoTranscript(lessonId: string): Promise<VideoTranscript | undefined>;
+  createVideoTranscript(transcript: InsertVideoTranscript): Promise<VideoTranscript>;
+  updateVideoTranscript(id: string, updates: Partial<VideoTranscript>): Promise<VideoTranscript | undefined>;
+
+  // RAG - Text Chunks
+  getTextChunksByLesson(lessonId: string): Promise<TextChunk[]>;
+  createTextChunk(chunk: InsertTextChunk): Promise<TextChunk>;
+  searchTextChunks(queryEmbedding: number[], lessonId?: string, limit?: number): Promise<TextChunk[]>;
 
   // Certificates
   getCertificate(id: string): Promise<Certificate & { courseTotalDuration?: number } | undefined>;
@@ -560,6 +576,55 @@ export class DatabaseStorage implements IStorage {
   async createLessonNote(noteData: InsertLessonNote): Promise<LessonNote> {
     const [note] = await db.insert(lessonNotes).values(noteData).returning();
     return note;
+  }
+
+  // RAG - Video Transcripts
+  async getVideoTranscript(lessonId: string): Promise<VideoTranscript | undefined> {
+    const [transcript] = await db
+      .select()
+      .from(videoTranscripts)
+      .where(eq(videoTranscripts.lessonId, lessonId));
+    return transcript;
+  }
+
+  async createVideoTranscript(transcriptData: InsertVideoTranscript): Promise<VideoTranscript> {
+    const [transcript] = await db.insert(videoTranscripts).values(transcriptData).returning();
+    return transcript;
+  }
+
+  async updateVideoTranscript(id: string, updates: Partial<VideoTranscript>): Promise<VideoTranscript | undefined> {
+    const [transcript] = await db
+      .update(videoTranscripts)
+      .set(updates)
+      .where(eq(videoTranscripts.id, id))
+      .returning();
+    return transcript;
+  }
+
+  // RAG - Text Chunks
+  async getTextChunksByLesson(lessonId: string): Promise<TextChunk[]> {
+    return db
+      .select()
+      .from(textChunks)
+      .where(eq(textChunks.lessonId, lessonId))
+      .orderBy(textChunks.chunkIndex);
+  }
+
+  async createTextChunk(chunkData: InsertTextChunk): Promise<TextChunk> {
+    const [chunk] = await db.insert(textChunks).values(chunkData).returning();
+    return chunk;
+  }
+
+  async searchTextChunks(queryEmbedding: number[], lessonId?: string, limit: number = 5): Promise<TextChunk[]> {
+    // For now, return chunks by lesson. In production, you'd use vector similarity search
+    // This is a placeholder - you'll need to implement proper vector search with pgvector
+    const query = db.select().from(textChunks).limit(limit);
+
+    if (lessonId) {
+      query.where(eq(textChunks.lessonId, lessonId));
+    }
+
+    return query.orderBy(textChunks.chunkIndex);
   }
 
   // Certificates

@@ -15,6 +15,13 @@
       "when": 1765441528222,
       "tag": "0001_steady_scarlet_spider",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1765526276177,
+      "tag": "0002_smiling_lord_tyger",
+      "breakpoints": true
     }
   ]
 }
