@@ -177,16 +177,58 @@ export default function CreateCourse() {
       const result = await response.json();
       return result.data; // Extract data from { success, data } response
     },
-    onSuccess: (data) => {
+    onSuccess: async (course) => {
       queryClient.invalidateQueries({ queryKey: ["/api/courses"] });
       queryClient.invalidateQueries({ queryKey: ["/api/courses/my"] });
-      const isPublic = form.getValues("isPublic");
-      toast({
-        title: "Course Created",
-        description: isPublic 
-          ? "Your course has been submitted for marketplace approval!"
-          : "Your course is now available in My Courses!",
-      });
+
+      // Process lessons for RAG (AI assistant)
+      try {
+        toast({
+          title: "Course Created",
+          description: "Processing lessons for AI assistant...",
+        });
+
+        // Collect all lesson IDs from the created course
+        const lessonIds: string[] = [];
+        course.sections.forEach((section: any) => {
+          section.lessons.forEach((lesson: any) => {
+            lessonIds.push(lesson.id);
+          });
+        });
+
+        // Process each lesson for RAG
+        let processedCount = 0;
+        for (const lessonId of lessonIds) {
+          try {
+            const response = await authFetch(`/api/rag/process-lesson/${lessonId}`, {
+              method: "POST",
+            });
+            if (response.ok) {
+              processedCount++;
+            }
+          } catch (error) {
+            console.error(`Failed to process lesson ${lessonId}:`, error);
+          }
+        }
+
+        const isPublic = form.getValues("isPublic");
+        toast({
+          title: "Course Ready!",
+          description: isPublic
+            ? `Course submitted for marketplace approval! ${processedCount}/${lessonIds.length} lessons processed for AI assistant.`
+            : `Course available in My Courses! ${processedCount}/${lessonIds.length} lessons processed for AI assistant.`,
+        });
+      } catch (error) {
+        console.error("RAG processing failed:", error);
+        const isPublic = form.getValues("isPublic");
+        toast({
+          title: "Course Created",
+          description: isPublic
+            ? "Course submitted for marketplace approval! (AI processing may take a moment)"
+            : "Course available in My Courses! (AI processing may take a moment)",
+        });
+      }
+
       setLocation(`/my-courses`);
     },
     onError: (error) => {

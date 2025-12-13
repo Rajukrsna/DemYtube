@@ -16,6 +16,7 @@
     "@clerk/backend": "^2.25.1",
     "@clerk/clerk-react": "^5.57.1",
     "@clerk/express": "^1.7.54",
+    "@google/generative-ai": "^0.24.1",
     "@hookform/resolvers": "^3.10.0",
     "@jridgewell/trace-mapping": "^0.3.25",
     "@radix-ui/react-accordion": "^1.2.4",
@@ -85,6 +86,7 @@
     "vaul": "^1.1.2",
     "wouter": "^3.3.5",
     "ws": "^8.18.0",
+    "yt-dlp-exec": "^1.0.2",
     "zod": "^3.24.2",
     "zod-validation-error": "^3.4.0"
   },

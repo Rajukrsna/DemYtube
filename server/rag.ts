@@ -1,124 +1,168 @@
-import OpenAI from "openai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import { google } from "googleapis";
+import { OpenAI } from "openai";
 import { storage } from "./storage";
 import type { Lesson, VideoTranscript, TextChunk } from "@shared/schema";
 
 export class RAGService {
+  private genAI: GoogleGenerativeAI | null;
+  private embeddingModel: any;
+  private chatModel: any;
   private openai: OpenAI | null;
 
   constructor() {
-    this.openai = process.env.OPENAI_API_KEY
-      ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
-      : null;
+    if (process.env.GOOGLE_GEMINI_API_KEY) {
+      this.genAI = new GoogleGenerativeAI(process.env.GOOGLE_GEMINI_API_KEY);
+      this.embeddingModel = this.genAI.getGenerativeModel({ model: "text-embedding-004" });
+      this.chatModel = this.genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    } else {
+      this.genAI = null;
+      this.embeddingModel = null;
+      this.chatModel = null;
+    }
+
+    // Initialize OpenAI for Whisper
+    if (process.env.OPENAI_API_KEY) {
+      this.openai = new OpenAI({
+        apiKey: process.env.OPENAI_API_KEY,
+      });
+    } else {
+      this.openai = null;
+    }
   }
 
   /**
-   * Get transcript for a YouTube video
-   * Priority: YouTube captions > Whisper ASR
+   * Get transcript for a YouTube video using Whisper ASR
    */
   async getVideoTranscript(lesson: Lesson): Promise<string | null> {
     const videoId = lesson.youtubeVideoId;
 
-    // Try YouTube captions first
     try {
-      const captions = await this.getYouTubeCaptions(videoId);
-      if (captions) {
-        await storage.createVideoTranscript({
-          lessonId: lesson.id,
-          transcript: captions,
-          source: "youtube_captions",
-          language: "en",
-        });
-        return captions;
+      // Download audio from YouTube
+      const audioPath = await this.downloadYouTubeAudio(videoId);
+      if (!audioPath) {
+        console.log(`Failed to download audio for video ${videoId}`);
+        return null;
       }
-    } catch (error) {
-      console.error("YouTube captions failed:", error);
-    }
 
-    // Fallback to Whisper ASR (placeholder - would need video download)
-    try {
-      // This is a placeholder. In production, you'd:
-      // 1. Download the video/audio
-      // 2. Run Whisper ASR
-      // 3. Save the transcript
-      console.log("Whisper ASR not implemented yet for video:", videoId);
-      return null;
+      // Transcribe using Whisper
+      const transcript = await this.transcribeWithWhisper(audioPath);
+      if (!transcript) {
+        console.log(`Failed to transcribe audio for video ${videoId}`);
+        return null;
+      }
+
+      // Clean up temporary audio file
+      await this.cleanupFile(audioPath);
+
+      // Save transcript to database
+      await storage.createVideoTranscript({
+        lessonId: lesson.id,
+        transcript: transcript,
+        source: "whisper_asr",
+        language: "en",
+      });
+
+      console.log(`Successfully transcribed video ${videoId} (${transcript.length} characters)`);
+      return transcript;
+
     } catch (error) {
-      console.error("Whisper ASR failed:", error);
+      console.error("Whisper transcription failed:", error);
       return null;
     }
   }
 
   /**
-   * Get YouTube captions/subtitles
+   * Download audio from YouTube video
    */
-  private async getYouTubeCaptions(videoId: string): Promise<string | null> {
-    if (!process.env.YOUTUBE_API_KEY) {
-      return null;
-    }
-
-    const youtube = google.youtube({
-      version: 'v3',
-      auth: process.env.YOUTUBE_API_KEY
-    });
+  private async downloadYouTubeAudio(videoId: string): Promise<string | null> {
+    const fs = require('fs').promises;
+    const path = require('path');
+    const ytdlp = require('yt-dlp-exec');
 
     try {
-      // Get caption tracks
-      const captionResponse = await youtube.captions.list({
-        part: ['snippet'],
-        videoId: videoId,
+      // Create temp directory if it doesn't exist
+      const tempDir = path.join(process.cwd(), 'temp');
+      await fs.mkdir(tempDir, { recursive: true });
+
+      const audioPath = path.join(tempDir, `${videoId}.mp3`);
+      const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
+
+      console.log(`Downloading audio for video ${videoId}...`);
+
+      // Use yt-dlp-exec to download audio
+      await ytdlp(videoUrl, {
+        extractAudio: true,
+        audioFormat: 'mp3',
+        audioQuality: 0, // Best quality
+        output: audioPath,
+        noCheckCertificates: true,
+        noWarnings: true,
+        preferFreeFormats: true,
       });
 
-      if (!captionResponse.data.items || captionResponse.data.items.length === 0) {
-        return null;
+      // Check if file exists and has content
+      const stats = await fs.stat(audioPath);
+      if (stats.size === 0) {
+        throw new Error('Downloaded file is empty');
       }
 
-      // Find English captions
-      const englishCaption = captionResponse.data.items.find(
-        item => item.snippet?.language === 'en' || item.snippet?.language?.startsWith('en')
-      );
+      console.log(`Successfully downloaded audio: ${audioPath} (${stats.size} bytes)`);
+      return audioPath;
 
-      if (!englishCaption?.id) {
-        return null;
-      }
-
-      // Download the caption track
-      const downloadResponse = await youtube.captions.download({
-        id: englishCaption.id,
-        tfmt: 'srt', // SubRip format
-      });
-
-      // Parse SRT to plain text (simplified)
-      const srtText = downloadResponse.data as string;
-      const plainText = this.parseSRT(srtText);
-
-      return plainText;
     } catch (error) {
-      console.error("YouTube captions download failed:", error);
+      console.error('YouTube audio download failed:', error);
       return null;
     }
   }
 
   /**
-   * Parse SRT subtitle format to plain text
+   * Transcribe audio using OpenAI Whisper
    */
-  private parseSRT(srtContent: string): string {
-    // Remove subtitle numbers and timestamps, keep only text
-    const lines = srtContent.split('\n');
-    const textLines: string[] = [];
-
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i].trim();
-
-      // Skip empty lines, numbers, and timestamps
-      if (!line || /^\d+$/.test(line) || /\d{2}:\d{2}:\d{2}/.test(line)) {
-        continue;
-      }
-
-      textLines.push(line);
+  private async transcribeWithWhisper(audioPath: string): Promise<string | null> {
+    if (!this.openai) {
+      console.error('OpenAI client not configured for Whisper');
+      return null;
     }
 
-    return textLines.join(' ').replace(/\s+/g, ' ').trim();
+    try {
+      const fs = require('fs');
+
+      console.log(`Transcribing audio file: ${audioPath}`);
+
+      // Read the audio file
+      const audioFile = fs.createReadStream(audioPath);
+
+      // Use OpenAI Whisper API
+      const transcription = await this.openai.audio.transcriptions.create({
+        file: audioFile,
+        model: 'whisper-1',
+        language: 'en',
+        response_format: 'text',
+      });
+
+      const transcript = transcription as string;
+      console.log(`Transcription completed: ${transcript.length} characters`);
+
+      return transcript;
+
+    } catch (error) {
+      console.error('Whisper transcription failed:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Clean up temporary files
+   */
+  private async cleanupFile(filePath: string): Promise<void> {
+    try {
+      const fs = require('fs').promises;
+      await fs.unlink(filePath);
+      console.log(`Cleaned up temporary file: ${filePath}`);
+    } catch (error) {
+      console.error('Failed to cleanup file:', filePath, error);
+    }
   }
 
   /**
@@ -161,16 +205,25 @@ export class RAGService {
    * Generate embeddings for text chunks
    */
   async generateEmbeddings(texts: string[]): Promise<number[][]> {
-    if (!this.openai) {
-      throw new Error("OpenAI API key not configured");
+    if (!this.embeddingModel) {
+      throw new Error("Google Gemini API key not configured");
     }
 
-    const response = await this.openai.embeddings.create({
-      model: "text-embedding-3-small",
-      input: texts,
-    });
+    try {
+      const embeddings: number[][] = [];
 
-    return response.data.map(item => item.embedding);
+      // Process each text individually (Gemini embedding API works per text)
+      for (const text of texts) {
+        const result = await this.embeddingModel.embedContent({
+          content: { parts: [{ text }] }
+        });
+        embeddings.push(result.embedding.values);
+      }
+      return embeddings;
+    } catch (error) {
+      console.error("Gemini embedding error:", error);
+      throw new Error("Failed to generate embeddings with Gemini");
+    }
   }
 
   /**
@@ -187,16 +240,20 @@ export class RAGService {
     // Get transcript
     const transcript = await this.getVideoTranscript(lesson);
     if (!transcript) {
-      console.log(`No transcript available for lesson ${lesson.id}`);
+      console.log(`No transcript available for lesson ${lesson.id} (${lesson.title}) - skipping RAG processing`);
       return;
     }
 
+    console.log(`Processing lesson "${lesson.title}" for RAG...`);
+
     // Chunk the transcript
     const chunks = this.chunkTranscript(transcript);
+    console.log(`Created ${chunks.length} chunks for lesson ${lesson.id}`);
 
     // Generate embeddings for all chunks
     const chunkTexts = chunks.map(chunk => chunk.content);
     const embeddings = await this.generateEmbeddings(chunkTexts);
+    console.log(`Generated embeddings for ${embeddings.length} chunks`);
 
     // Save chunks with embeddings
     for (let i = 0; i < chunks.length; i++) {
@@ -212,7 +269,7 @@ export class RAGService {
       });
     }
 
-    console.log(`Processed ${chunks.length} chunks for lesson ${lesson.id}`);
+    console.log(`✅ Successfully processed ${chunks.length} chunks for lesson ${lesson.id}`);
   }
 
   /**
@@ -237,7 +294,7 @@ export class RAGService {
   }
 
   /**
-   * Generate RAG-enhanced response
+   * Generate RAG-enhanced response using Gemini
    */
   async generateRAGResponse(
     question: string,
@@ -245,9 +302,17 @@ export class RAGService {
     courseDescription: string,
     relevantChunks: TextChunk[]
   ): Promise<{ answer: string; sources: Array<{ lessonId: string; timestamp: number; snippet: string }> }> {
-    if (!this.openai) {
+    if (!this.chatModel) {
       return {
-        answer: "AI assistant is not configured. Please check OpenAI API key.",
+        answer: "AI assistant is not configured. Please check Google Gemini API key.",
+        sources: []
+      };
+    }
+
+    // If no relevant chunks, provide a helpful response
+    if (relevantChunks.length === 0) {
+      return {
+        answer: `I don't have specific information from the course content about "${question}". The course "${courseTitle}" may not have been processed for AI assistance yet, or this topic might not be covered in the available video transcripts. Try asking about specific topics you see in the course lessons.`,
         sources: []
       };
     }
@@ -274,18 +339,31 @@ Include specific timestamps when relevant to help students navigate to the exact
 Context from course videos:
 ${context}`;
 
-    const response = await this.openai.chat.completions.create({
-      model: "gpt-4o",
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: question }
-      ],
-      max_tokens: 500,
-    });
+    try {
+      const chat = this.chatModel.startChat({
+        history: [
+          {
+            role: "user",
+            parts: [{ text: systemPrompt }]
+          },
+          {
+            role: "model",
+            parts: [{ text: "I understand. I'll help students with questions about this course using only the provided context." }]
+          }
+        ]
+      });
 
-    const answer = response.choices[0].message.content || "I couldn't generate a response.";
+      const result = await chat.sendMessage(question);
+      const answer = result.response.text() || "I couldn't generate a response.";
 
-    return { answer, sources };
+      return { answer, sources };
+    } catch (error) {
+      console.error("Gemini chat error:", error);
+      return {
+        answer: "Sorry, I encountered an error while generating a response. Please try again.",
+        sources
+      };
+    }
   }
 }
 

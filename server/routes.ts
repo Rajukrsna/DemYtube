@@ -6,6 +6,7 @@ import {authenticateUser, optionalAuth} from "./auth"
 import { OpenAI } from "openai"
 import { google } from "googleapis"
 import {randomUUID} from "crypto"
+import type { TextChunk } from "@shared/schema";
 function getOpenAI(): OpenAI | null {
   if (!process.env.OPENAI_API_KEY) {
     return null;
@@ -486,7 +487,7 @@ console.log("Updated watch time:", progress);
         }
       }
 
-      if (!transcripts && !process.env.OPENAI_API_KEY) {
+      if (!transcripts && !process.env.GOOGLE_GEMINI_API_KEY) {
         // Create mock quiz if no AI available
         const quiz = await storage.createQuiz({
           courseId: course.id,
@@ -511,9 +512,8 @@ console.log("Updated watch time:", progress);
         return res.json(fullQuiz);
       }
 
-      // Generate questions with OpenAI
-      const openai = getOpenAI();
-      if (!openai) {
+      // Generate questions with Gemini
+      if (!process.env.GOOGLE_GEMINI_API_KEY) {
         // Create mock quiz if no AI available
         const quiz = await storage.createQuiz({
           courseId: course.id,
@@ -537,24 +537,26 @@ console.log("Updated watch time:", progress);
         const fullQuiz = await storage.getQuizByCourse(course.id);
         return res.json(fullQuiz);
       }
-      
-      const completion = await openai.chat.completions.create({
-        model: "gpt-4o",
-        messages: [
-          {
-            role: "system",
-            content: `Generate 5 practice questions for a course. Mix multiple choice and short answer questions. 
-            Return as JSON array: [{ questionText, questionType: "mcq" or "short_answer", options: [{id, text}] (for mcq), correctAnswer }]`,
-          },
-          {
-            role: "user",
-            content: `Course: ${course.title}\nDescription: ${course.description}\n\nGenerate practice questions.`,
-          },
-        ],
-        response_format: { type: "json_object" },
-      });
 
-      const questionsData = JSON.parse(completion.choices[0].message.content || "{}");
+      const genAI = new (await import("@google/generative-ai")).GoogleGenerativeAI(process.env.GOOGLE_GEMINI_API_KEY);
+      const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+
+      const prompt = `Generate 5 practice questions for a course. Mix multiple choice and short answer questions.
+Return as JSON with this exact structure: {"questions": [{ "questionText": "string", "questionType": "mcq" or "short_answer", "options": [{"id": "a", "text": "string"}, {"id": "b", "text": "string"}, {"id": "c", "text": "string"}, {"id": "d", "text": "string"}] (for mcq only), "correctAnswer": "a" or "string" }]}
+
+Course: ${course.title}
+Description: ${course.description}
+${transcripts ? `Course Content:\n${transcripts}` : ''}
+
+Generate practice questions based on the course content.`;
+
+      const result = await model.generateContent(prompt);
+      const response = await result.response;
+      const text = response.text();
+
+      // Extract JSON from response
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      const questionsData = jsonMatch ? JSON.parse(jsonMatch[0]) : { questions: [] };
       
       const quiz = await storage.createQuiz({
         courseId: course.id,
@@ -681,15 +683,22 @@ console.log("Updated watch time:", progress);
       }
 
       // Check if user has access to this lesson's course
-      const enrollment = await storage.getEnrollment(req.auth.userId, lesson.sectionId); // Wait, this is wrong - need courseId
-      // Actually, let's get the course through the section
       const section = await storage.getSection(lesson.sectionId);
       if (!section) {
         return res.status(404).json({ success: false, message: "Section not found" });
       }
 
-      const enrollmentCheck = await storage.getEnrollment(req.auth.userId, section.courseId);
-      if (!enrollmentCheck) {
+      // Get the course to check instructor access
+      const course = await storage.getCourse(section.courseId);
+      if (!course) {
+        return res.status(404).json({ success: false, message: "Course not found" });
+      }
+
+      // Allow access if user is enrolled OR is the course instructor
+      const enrollment = await storage.getEnrollment(req.auth.userId, section.courseId);
+      const isInstructor = course.instructorId === req.auth.userId;
+
+      if (!enrollment && !isInstructor) {
         return res.status(403).json({ success: false, message: "Access denied" });
       }
 

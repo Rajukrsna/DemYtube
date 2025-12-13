@@ -40,6 +40,12 @@ interface QuizQuestion extends Question {
   options: { id: string; text: string }[];
 }
 
+interface ChatMessageSource {
+  lessonId: string;
+  timestamp: number;
+  snippet: string;
+}
+
 // YouTube Player API types
 declare global {
   interface Window {
@@ -184,15 +190,14 @@ export default function CoursePlayer() {
 
         // If we're marking as complete and the lesson wasn't in progress before, add it
         const exists = newProgress.some(p => p.lessonId === lessonId);
-        if (!exists && !completed) {
+        if (!exists && !completed && user) {
           newProgress.push({
             id: `temp-${lessonId}`,
             lessonId,
+            userId: user.id,
+            watchedSeconds: 0,
             completed: true,
-            watchTime: 0,
-            userId: "",
-            createdAt: new Date(),
-            updatedAt: new Date()
+            completedAt: new Date()
           });
         }
 
@@ -727,20 +732,21 @@ export default function CoursePlayer() {
                         </div>
                         
                         {/* Display sources for assistant messages */}
-                        {msg.role === "assistant" && msg.sources && msg.sources.length > 0 && (
+                        {
+                        msg.role === "assistant" && msg.sources && Array.isArray(msg.sources) && msg.sources.length > 0 && (
                           <div className="mt-2 space-y-1">
                             <p className="text-xs text-muted-foreground font-medium">Sources:</p>
-                            {msg.sources.map((source, index) => (
+                            {(msg.sources as ChatMessageSource[]).map((source, index) => (
                               <div key={index} className="flex items-center gap-2 text-xs">
-                                <Badge 
-                                  variant="outline" 
+                                <Badge
+                                  variant="outline"
                                   className="cursor-pointer hover:bg-primary hover:text-primary-foreground transition-colors"
                                   onClick={() => {
                                     // Find the lesson and seek to timestamp
                                     const lesson = course?.sections
                                       ?.flatMap(section => section.lessons || [])
                                       .find(l => l.id === source.lessonId);
-                                    
+
                                     if (lesson) {
                                       setActiveLesson(lesson);
                                       // Small delay to ensure video loads
@@ -934,11 +940,11 @@ export default function CoursePlayer() {
                                   </div>
                                   <p className="text-sm whitespace-pre-wrap">{note.content}</p>
                                   <p className="text-xs text-muted-foreground mt-2">
-                                    {new Date(note.createdAt).toLocaleDateString()} at{" "}
-                                    {new Date(note.createdAt).toLocaleTimeString([], {
+                                    {note.createdAt ? new Date(note.createdAt).toLocaleDateString() : 'Unknown date'} at{" "}
+                                    {note.createdAt ? new Date(note.createdAt).toLocaleTimeString([], {
                                       hour: "2-digit",
                                       minute: "2-digit",
-                                    })}
+                                    }) : 'Unknown time'}
                                   </p>
                                 </div>
                               </div>
