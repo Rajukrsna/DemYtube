@@ -8,10 +8,27 @@ import {
   timestamp,
   decimal,
   jsonb,
+  customType,
   index,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
+
+// Custom vector type for pgvector
+const vector = customType<{
+  data: number[];
+  driverData: string;
+}>({
+  dataType(config) {
+    return `vector(${config?.dimensions ?? 768})`;
+  },
+  toDriver(value: number[]): string {
+    return `[${value.join(',')}]`;
+  },
+  fromDriver(value: string): number[] {
+    return value.slice(1, -1).split(',').map(Number);
+  },
+});
 
 // Session storage table for Replit Auth
 export const sessions = pgTable(
@@ -173,7 +190,7 @@ export const textChunks = pgTable("text_chunks", {
   startTime: integer("start_time").notNull(), // Start timestamp in seconds
   endTime: integer("end_time").notNull(), // End timestamp in seconds
   tokenCount: integer("token_count").notNull(), // Approximate token count
-  embedding: text("embedding"), // JSON string of embedding vector (will use pgvector extension)
+  embedding: vector("embedding", { dimensions: 768 }), // Vector embedding for similarity search
   createdAt: timestamp("created_at").defaultNow(),
 }, (table) => [
   index("IDX_text_chunks_lesson").on(table.lessonId),

@@ -1,0 +1,3 @@
+CREATE EXTENSION IF NOT EXISTS vector;
+
+ALTER TABLE "text_chunks" ALTER COLUMN "embedding" SET DATA TYPE vector(768);

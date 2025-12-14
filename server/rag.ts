@@ -2,6 +2,11 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import { google } from "googleapis";
 import { OpenAI } from "openai";
 import { storage } from "./storage";
+import { spawn } from "child_process";
+import { join } from "path";
+import { promises as fs } from "fs";
+import * as path from "path";
+import ytdlp from "yt-dlp-exec";
 import type { Lesson, VideoTranscript, TextChunk } from "@shared/schema";
 
 export class RAGService {
@@ -76,10 +81,6 @@ export class RAGService {
    * Download audio from YouTube video
    */
   private async downloadYouTubeAudio(videoId: string): Promise<string | null> {
-    const fs = require('fs').promises;
-    const path = require('path');
-    const ytdlp = require('yt-dlp-exec');
-
     try {
       // Create temp directory if it doesn't exist
       const tempDir = path.join(process.cwd(), 'temp');
@@ -117,34 +118,53 @@ export class RAGService {
   }
 
   /**
-   * Transcribe audio using OpenAI Whisper
+   * Transcribe audio using local Whisper
    */
   private async transcribeWithWhisper(audioPath: string): Promise<string | null> {
-    if (!this.openai) {
-      console.error('OpenAI client not configured for Whisper');
-      return null;
-    }
-
     try {
-      const fs = require('fs');
-
       console.log(`Transcribing audio file: ${audioPath}`);
 
-      // Read the audio file
-      const audioFile = fs.createReadStream(audioPath);
+      // Path to the Python script
+      const scriptPath = join(process.cwd(), 'script', 'transcribe.py');
 
-      // Use OpenAI Whisper API
-      const transcription = await this.openai.audio.transcriptions.create({
-        file: audioFile,
-        model: 'whisper-1',
-        language: 'en',
-        response_format: 'text',
+      // Run the Python script
+      const transcript = await new Promise<string | null>((resolve, reject) => {
+        const pythonProcess = spawn('python', [scriptPath, audioPath], {
+          stdio: ['pipe', 'pipe', 'pipe']
+        });
+
+        let stdout = '';
+        let stderr = '';
+
+        pythonProcess.stdout.on('data', (data) => {
+          stdout += data.toString();
+        });
+
+        pythonProcess.stderr.on('data', (data) => {
+          stderr += data.toString();
+        });
+
+        pythonProcess.on('close', (code) => {
+          if (code === 0) {
+            resolve(stdout.trim());
+          } else {
+            console.error('Python script failed:', stderr);
+            resolve(null);
+          }
+        });
+
+        pythonProcess.on('error', (error) => {
+          console.error('Failed to start Python process:', error);
+          resolve(null);
+        });
       });
 
-      const transcript = transcription as string;
-      console.log(`Transcription completed: ${transcript.length} characters`);
-
-      return transcript;
+      if (transcript) {
+        console.log(`Transcription completed: ${transcript.length} characters`);
+        return transcript;
+      } else {
+        return null;
+      }
 
     } catch (error) {
       console.error('Whisper transcription failed:', error);
@@ -157,7 +177,6 @@ export class RAGService {
    */
   private async cleanupFile(filePath: string): Promise<void> {
     try {
-      const fs = require('fs').promises;
       await fs.unlink(filePath);
       console.log(`Cleaned up temporary file: ${filePath}`);
     } catch (error) {
@@ -244,6 +263,13 @@ export class RAGService {
       return;
     }
 
+    // Retrieve the transcript record that was just created
+    const transcriptRecord = await storage.getVideoTranscript(lesson.id);
+    if (!transcriptRecord) {
+      console.error(`Failed to retrieve transcript record for lesson ${lesson.id}`);
+      return;
+    }
+
     console.log(`Processing lesson "${lesson.title}" for RAG...`);
 
     // Chunk the transcript
@@ -259,13 +285,13 @@ export class RAGService {
     for (let i = 0; i < chunks.length; i++) {
       await storage.createTextChunk({
         lessonId: lesson.id,
-        transcriptId: existingTranscript!.id,
+        transcriptId: transcriptRecord.id,
         chunkIndex: i,
         content: chunks[i].content,
         startTime: chunks[i].startTime,
         endTime: chunks[i].endTime,
         tokenCount: chunks[i].content.split(' ').length, // Rough estimate
-        embedding: JSON.stringify(embeddings[i]),
+        embedding: embeddings[i],
       });
     }
 
@@ -275,22 +301,22 @@ export class RAGService {
   /**
    * Search for relevant chunks using semantic similarity
    */
-  async semanticSearch(query: string, lessonId?: string, limit: number = 5): Promise<TextChunk[]> {
-    // For now, return chunks from the specified lesson or all chunks
-    // In production, implement proper vector similarity search with pgvector
-    const chunks = await storage.getTextChunksByLesson(lessonId || "");
+  async semanticSearch(query: string, lessonId?: string, limit: number = 5, similarityThreshold: number = 0.3): Promise<TextChunk[]> {
+    // Generate embedding for the query
+    const queryEmbedding = await this.generateEmbeddings([query]);
+    if (queryEmbedding.length === 0) {
+      throw new Error("Failed to generate embedding for query");
+    }
 
-    // Simple text-based relevance scoring (placeholder for vector search)
-    const queryLower = query.toLowerCase();
-    const scoredChunks = chunks
-      .map(chunk => ({
-        ...chunk,
-        score: chunk.content.toLowerCase().includes(queryLower) ? 1 : 0
-      }))
-      .sort((a, b) => b.score - a.score)
-      .slice(0, limit);
+    // Use pgvector for efficient similarity search
+    const relevantChunks = await storage.searchTextChunksByVector(
+      queryEmbedding[0],
+      lessonId,
+      limit,
+      similarityThreshold
+    );
 
-    return scoredChunks;
+    return relevantChunks;
   }
 
   /**

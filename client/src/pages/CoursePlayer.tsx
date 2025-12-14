@@ -212,7 +212,7 @@ export default function CoursePlayer() {
       if (context?.previousProgress) {
         queryClient.setQueryData(["/api/progress", courseId], context.previousProgress);
       }
-      toast({
+      toast({ 
         title: "Error",
         description: "Failed to update lesson progress. Please try again.",
         variant: "destructive",

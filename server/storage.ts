@@ -118,7 +118,7 @@ export interface IStorage {
   // RAG - Text Chunks
   getTextChunksByLesson(lessonId: string): Promise<TextChunk[]>;
   createTextChunk(chunk: InsertTextChunk): Promise<TextChunk>;
-  searchTextChunks(queryEmbedding: number[], lessonId?: string, limit?: number): Promise<TextChunk[]>;
+  searchTextChunksByVector(queryEmbedding: number[], lessonId?: string, limit?: number): Promise<TextChunk[]>;
 
   // Certificates
   getCertificate(id: string): Promise<Certificate & { courseTotalDuration?: number } | undefined>;
@@ -603,11 +603,16 @@ export class DatabaseStorage implements IStorage {
 
   // RAG - Text Chunks
   async getTextChunksByLesson(lessonId: string): Promise<TextChunk[]> {
-    return db
-      .select()
-      .from(textChunks)
-      .where(eq(textChunks.lessonId, lessonId))
-      .orderBy(textChunks.chunkIndex);
+    if (lessonId) {
+      return db
+        .select()
+        .from(textChunks)
+        .where(eq(textChunks.lessonId, lessonId))
+        .orderBy(textChunks.chunkIndex);
+    } else {
+      // Return all chunks if no lessonId specified
+      return db.select().from(textChunks).orderBy(textChunks.lessonId, textChunks.chunkIndex);
+    }
   }
 
   async createTextChunk(chunkData: InsertTextChunk): Promise<TextChunk> {
@@ -615,16 +620,37 @@ export class DatabaseStorage implements IStorage {
     return chunk;
   }
 
-  async searchTextChunks(queryEmbedding: number[], lessonId?: string, limit: number = 5): Promise<TextChunk[]> {
-    // For now, return chunks by lesson. In production, you'd use vector similarity search
-    // This is a placeholder - you'll need to implement proper vector search with pgvector
-    const query = db.select().from(textChunks).limit(limit);
+  async searchTextChunksByVector(queryEmbedding: number[], lessonId?: string, limit: number = 5, similarityThreshold: number = 0.3): Promise<TextChunk[]> {
+    // Use pgvector cosine similarity search
+    const queryVector = `[${queryEmbedding.join(',')}]`;
 
-    if (lessonId) {
-      query.where(eq(textChunks.lessonId, lessonId));
-    }
+    const whereConditions = lessonId
+      ? and(
+          sql`1 - (embedding <=> ${queryVector}) > ${similarityThreshold}`,
+          eq(textChunks.lessonId, lessonId)
+        )
+      : sql`1 - (embedding <=> ${queryVector}) > ${similarityThreshold}`;
 
-    return query.orderBy(textChunks.chunkIndex);
+    const results = await db
+      .select({
+        id: textChunks.id,
+        lessonId: textChunks.lessonId,
+        transcriptId: textChunks.transcriptId,
+        chunkIndex: textChunks.chunkIndex,
+        content: textChunks.content,
+        startTime: textChunks.startTime,
+        endTime: textChunks.endTime,
+        tokenCount: textChunks.tokenCount,
+        embedding: textChunks.embedding,
+        createdAt: textChunks.createdAt,
+        similarity: sql<number>`1 - (embedding <=> ${queryVector})`.as('similarity'),
+      })
+      .from(textChunks)
+      .where(whereConditions)
+      .orderBy(sql`embedding <=> ${queryVector}`)
+      .limit(limit);
+
+    return results;
   }
 
   // Certificates
